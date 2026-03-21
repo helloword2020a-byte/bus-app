@@ -10,10 +10,8 @@ import json
 BAIDU_OCR_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"        
 BAIDU_OCR_SECRET = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
 
-# 百度千帆 AI 密钥 (已为您填入 API Key)
-AI_API_KEY = ""ALTAKRoF5rezfzpBHyvueydG2B"
-
-# 👇 请在下面引号内粘贴刚才复制的内容（通常是一串 32 位的随机字符）
+# 百度千帆 AI 密钥（已为您填入最新生成的子用户凭证）
+AI_API_KEY = "ALTAKRoF5rezfzpBHyvueydG2B"
 AI_SECRET_KEY = "10bc499df39a472d882aee64221d1e31" 
 
 # 高德地图密钥（已配置好）
@@ -57,7 +55,7 @@ def ocr_engine(file_bytes):
 def ai_extract_locations(text):
     """ERNIE-Speed-Pro-128K 智能提取地名"""
     token = get_access_token(AI_API_KEY, AI_SECRET_KEY)
-    if not token: return "AI 授权失败，请检查第 16 行 Secret Key"
+    if not token: return "AI 授权失败，请检查密钥"
     
     url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-pro-128k?access_token={token}"
     
