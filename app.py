@@ -4,35 +4,38 @@ import requests
 import re
 
 # 页面基础配置
-st.set_page_config(page_title="包车报价中心", layout="wide")
+st.set_page_config(page_title="包车报价智能中心", layout="wide")
 
-# --- 强制注入 CSS 模拟聊天输入体验 ---
+# --- 增强版 CSS：解决“粘贴没反应”的视觉反馈问题 ---
 st.markdown("""
     <style>
-    /* 让上传框看起来像一个大型接收区 */
+    /* 让上传框看起来像一个超大的“捕捉网” */
     .stFileUploader {
-        border: 2px dashed #00a8ff;
+        border: 3px dashed #1e90ff !important;
         border-radius: 15px;
-        background-color: #f0f7ff;
+        background-color: #f0f8ff;
+        transition: all 0.3s ease;
     }
-    /* 隐藏多余的文字提示 */
-    .stFileUploader section > label {
-        display: none;
+    /* 当你点击它准备粘贴时，它会变色提醒你焦点已到位 */
+    .stFileUploader:active, .stFileUploader:focus-within {
+        border-color: #ff4757 !important;
+        background-color: #fffaf0;
+        box-shadow: 0 0 15px rgba(255, 71, 87, 0.3);
     }
-    /* 鼠标悬停变色，暗示可以点击粘贴 */
-    .stFileUploader:hover {
-        border-color: #0077cc;
-        background-color: #e6f2ff;
+    .stFileUploader label {
+        font-size: 1.2rem !important;
+        color: #1e90ff !important;
+        font-weight: bold;
     }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚌 包车报价智能中心")
+st.title("🚌 包车报价智能中心 (粘贴优化版)")
 
 # --- 高德 Key ---
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74" 
 
-# --- 侧边栏：价格参数 ---
+# --- 1️⃣ 侧边栏：参数调节 ---
 with st.sidebar:
     st.header("⚙️ 价格参数设置")
     p39 = st.number_input("39座单价 (元/公里)", value=2.6)
@@ -40,100 +43,94 @@ with st.sidebar:
     b39 = st.number_input("39座起步费 (元/天)", value=800.0)
     b56 = st.number_input("56座起步费 (元/天)", value=1000.0)
 
-# --- 1️⃣ 核心上传区（支持粘贴、PDF、DOCX、TXT） ---
-st.subheader("📎 文件/粘贴接收区")
-st.write("👉 **点击下方蓝色区域使其获得焦点后，直接按 Ctrl+V 粘贴截图，或点右侧按钮选文件。**")
+# --- 2️⃣ 接收区：请务必【点击】后再【粘贴】 ---
+st.subheader("📎 第一步：文件/截图接收区")
+st.warning("💡 **操作技巧**：先用鼠标**点一下**下方蓝色方框（框变色即激活），然后按 **Ctrl+V**。如果粘贴不灵，说明系统拦截了，请直接将文件**拖进去**。")
 
-uploaded_files = st.file_uploader(
-    "接收区", 
+# 增加 accept_multiple_files 提高兼容性
+files = st.file_uploader(
+    "👉 请在此处点击并粘贴截图，或上传 PDF/Word/TXT", 
     type=["jpg", "png", "jpeg", "pdf", "docx", "txt"],
-    accept_multiple_files=True,
-    help="点击此处后直接 Ctrl+V 粘贴剪贴板内容"
+    accept_multiple_files=True
 )
 
-# 展示已上传内容
-if uploaded_files:
-    cols = st.columns(len(uploaded_files))
-    for i, file in enumerate(uploaded_files):
-        with cols[i]:
-            if file.type.startswith("image"):
-                st.image(file, caption=f"已粘贴图片", width=200)
-            else:
-                st.success(f"已载入文件: {file.name}")
+if files:
+    st.success(f"✅ 已成功接收 {len(files)} 个文件/截图！")
+    with st.expander("查看已上传文件列表"):
+        for f in files:
+            st.write(f"📄 {f.name} ({f.type})")
 
-# --- 2️⃣ 文字识别粘贴区 ---
+# --- 3️⃣ 行程识别区 ---
 st.divider()
-st.subheader("⌨️ 行程文字识别")
-input_text = st.text_area(
-    "请在此粘贴行程文字（系统将自动提取地名）：", 
-    height=150, 
-    placeholder="在此粘贴您从图片或文档中提取的行程详情..."
-)
+st.subheader("⌨️ 第二步：粘贴行程文字")
+raw_text = st.text_area("请在这里粘贴您从行程单（图片/PDF）中提取出的文字：", height=150, placeholder="例如：4.12 南昌接 前往葛仙村...")
 
-def smart_extract(text):
+# 智能提取函数
+def quick_extract(text):
     if not text: return ""
-    # 过滤杂词
-    noise = [r"第\d+天", r"车程约[\d\.]+h", r"住[^\s]+", r"下午", r"上午", r"返程", r"接送", r"行程", r"约", r"h", r"车程", r"入住", r"前往", r"接引", r"小时", r"接"]
+    # 过滤掉行程单中常见的干扰杂词
+    stop_words = [r"第\d+天", r"车程", r"入住", r"前往", r"接引", r"小时", r"h", r"约", r"住", r"接"]
     temp = text
-    for n in noise: temp = re.sub(n, " ", temp)
-    # 提取汉字
-    found = re.findall(r'[\u4e00-\u9fa5]{2,6}', temp)
-    forbidden = ["可以", "到了", "选择", "需要", "提示", "进行", "返回"]
-    return " ".join([w for w in found if w not in forbidden and len(w) > 1])
+    for sw in stop_words:
+        temp = re.sub(sw, " ", temp)
+    # 仅提取2-6字的汉字（通常是地名）
+    names = re.findall(r'[\u4e00-\u9fa5]{2,6}', temp)
+    return " ".join(dict.fromkeys(names)) # 去重并保持顺序
 
-keywords = smart_extract(input_text)
+keywords = quick_extract(raw_text)
 
-# --- 3️⃣ 选点与报价 ---
-st.divider()
-final_input = st.text_input("📍 确认关键词（空格分隔）：", value=keywords)
+# --- 4️⃣ 站点确认 ---
+st.subheader("📍 第三步：核对站点")
+final_input = st.text_input("您可以手动修正提取出的地名（用空格隔开）：", value=keywords)
 
-final_locations = []
+final_locs = []
 if final_input:
     names = final_input.split()
-    grid = st.columns(min(len(names), 4))
+    cols = st.columns(min(len(names), 4))
     for i, name in enumerate(names):
-        with grid[i % 4]:
+        with cols[i % 4]:
             try:
+                # 优先定位江西周边坐标
                 url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}&location=115.89,28.67"
                 tips = requests.get(url).json().get('tips', [])
-                options = [f"{t['name']} ({t.get('district','')})" for t in tips if t.get('location')]
-                if not options: options = [f"{name} (未搜到)"]
+                opts = [f"{t['name']} ({t.get('district','')})" for t in tips if t.get('location')]
+                if not opts: opts = [f"{name} (未搜到)"]
                 
-                chosen = st.selectbox(f"站点{i+1}: {name}", options, key=f"pos_{i}")
-                act_name = chosen.split(" (")[0]
-                loc = next((t['location'] for t in tips if t['name'] == act_name and t.get('location')), None)
-                if loc: final_locations.append({"name": act_name, "coord": loc})
+                sel = st.selectbox(f"站点 {i+1}", opts, key=f"loc_{i}")
+                act_name = sel.split(" (")[0]
+                coord = next((t['location'] for t in tips if t['name'] == act_name and t.get('location')), None)
+                if coord: final_locs.append({"name": act_name, "coord": coord})
             except: pass
 
-# --- 4️⃣ 计算结果 ---
+# --- 5️⃣ 自动计算与报价 ---
 st.divider()
-auto_km = 0
-if len(final_locations) >= 2:
+km_calc = 0
+if len(final_locs) >= 2:
     try:
-        origin = final_locations[0]['coord']
-        dest = final_locations[-1]['coord']
-        ways = ";".join([l['coord'] for l in final_locations[1:-1]])
+        origin, dest = final_locs[0]['coord'], final_locs[-1]['coord']
+        mid = ";".join([l['coord'] for l in final_locs[1:-1]])
         r_url = f"https://restapi.amap.com/v3/direction/driving?origin={origin}&destination={dest}&key={AMAP_KEY}&strategy=2"
-        if ways: r_url += f"&waypoints={ways}"
+        if mid: r_url += f"&waypoints={mid}"
         res = requests.get(r_url).json()
         if res['status'] == '1':
-            auto_km = int(round(int(res['route']['paths'][0]['distance']) / 1000))
-    except: pass
+            km_calc = int(round(int(res['route']['paths'][0]['distance']) / 1000))
+    except: st.error("计算失败，请检查站点是否选择准确")
 
-col1, col2 = st.columns(2)
-with col1: km = st.number_input("确认公里数", value=int(auto_km), step=1)
-with col2: d = st.number_input("用车天数", min_value=1, value=4)
+c1, c2 = st.columns(2)
+with c1: final_km = st.number_input("实测公里数", value=km_calc, step=1)
+with c2: days = st.number_input("用车天数", min_value=1, value=4)
 
-f39 = int(km * p39 + d * b39)
-f56 = int(km * p56 + d * b56)
+f39 = int(final_km * p39 + days * b39)
+f56 = int(final_km * p56 + days * b56)
 
 st.table(pd.DataFrame({
     "车型": ["39座", "56座"],
-    "里程": [f"{km} KM"] * 2,
+    "里程": [f"{final_km} KM"] * 2,
+    "天数": [f"{days} 天"] * 2,
     "总报价": [f"{f39} 元", f"{f56} 元"]
 }))
 
-if final_locations:
-    route_str = " - ".join([l['name'] for l in final_locations])
-    msg = f"【包车报价单】\n路线：{route_str}\n里程：{km}公里\n天数：{d}天\n---\n39座：{f39}元\n56座：{f56}元"
-    st.text_area("报价单一键复制：", msg, height=100)
+if final_locs:
+    route_text = " - ".join([l['name'] for l in final_locs])
+    final_msg = f"【包车报价单】\n路线：{route_text}\n全程：约{final_km}公里\n时长：{days}天\n---\n39座：{f39}元\n56座：{f56}元"
+    st.text_area("点击下方全选复制报价：", final_msg, height=120)
