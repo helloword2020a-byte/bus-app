@@ -2,135 +2,112 @@ import streamlit as st
 import pandas as pd
 import requests
 import re
+from PIL import Image
 
 # 页面基础配置
-st.set_page_config(page_title="包车报价系统-精准识别版", layout="wide")
-st.title("🚌 包车报价系统（智能识别优化版）")
+st.set_page_config(page_title="包车报价-图片识别版", layout="wide")
+st.title("🚌 包车报价系统（图片+文字智能识别）")
 
 # --- 高德 Key ---
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74" 
 
-# --- 侧边栏：价格参数 ---
+# --- 侧边栏：单价设置 ---
 st.sidebar.header("单价/起步费调节")
-p39 = st.sidebar.number_input("39座单价 (元/公里)", value=2.6)
-p56 = st.sidebar.number_input("56座单价 (元/公里)", value=3.6)
-b39 = st.sidebar.number_input("39座起步费 (元/天)", value=800.0)
-b56 = st.sidebar.number_input("56座起步费 (元/天)", value=1000.0)
+p39 = st.sidebar.number_input("39座单价", value=2.6)
+p56 = st.sidebar.number_input("56座单价", value=3.6)
+b39 = st.sidebar.number_input("39座起步费", value=800.0)
+b56 = st.sidebar.number_input("56座起步费", value=1000.0)
 
-# --- 智能行程提取函数 (核心优化) ---
+# --- 核心函数：智能提取地名 ---
 def smart_extract(text):
     if not text: return ""
-    # 1. 彻底剔除行程单中的干扰词
+    # 过滤掉杂词、时间、住宿等描述
     noise = [
-        r"第\d+天", r"车程约[\d\.]+h", r"住[^\s]+", r"下午", r"上午", r"中午", r"晚上",
-        r"前往", r"返回", r"返程", r"接", r"送", r"简易行程", r"行程", r"约", r"h",
-        r"小时", r"车程", r"时间", r"入住"
+        r"第\d+天", r"车程约[\d\.]+h", r"住[^\s]+", r"下午", r"上午", r"返程", r"接送", 
+        r"简易行程", r"行程", r"约", r"h", r"车程", r"入住", r"前往", r"接引"
     ]
     temp_text = text
     for n in noise:
         temp_text = re.sub(n, " ", temp_text)
-    
-    # 2. 提取2-6字的汉字词（通常是地名）
+    # 提取2-6字汉字
     raw_words = re.findall(r'[\u4e00-\u9fa5]{2,6}', temp_text)
-    
-    # 3. 二次清理：剔除“前往”、“接引”这种动词或干扰词
-    forbidden = ["前往", "接引", "提示", "地址", "路线", "时间", "价格"]
-    clean_words = [w for w in raw_words if w not in forbidden]
-    
-    # 4. 去重并保持顺序
+    # 去重保留顺序
     result = []
-    for w in clean_words:
-        if w not in result:
+    for w in raw_words:
+        if w not in result and len(w) > 1:
             result.append(w)
     return " ".join(result)
 
-# --- 界面布局 ---
-st.subheader("🚀 智能行程识别")
-smart_text = st.text_area("请直接粘贴行程文本：", height=150, placeholder="例如：4.11 南昌接 前往大觉山...")
+# --- 新增：图片上传功能 ---
+st.subheader("📸 方式一：上传行程图片")
+uploaded_file = st.file_uploader("上传行程截图（支持jpg/png）", type=["asm", "jpg", "png", "jpeg"])
 
-# 执行识别
+ocr_text = ""
+if uploaded_file is not None:
+    st.image(uploaded_file, caption='已上传图片', width=300)
+    st.warning("ℹ️ 提示：云端 OCR 需要配置高级接口。目前建议您：截图后长按图片“提取文字”，然后粘贴到下方。")
+
+# --- 方式二：粘贴文本 ---
+st.subheader("⌨️ 方式二：粘贴行程文本")
+smart_text = st.text_area("直接粘贴行程内容：", height=100, placeholder="例如：4.11 南昌接 前往大觉山...")
+
+# 汇总提取结果
 identified_names = smart_extract(smart_text)
 
-if smart_text:
-    st.success(f"🔍 自动提取地名：{identified_names}")
-
-# --- 第一步：确认输入 ---
+# --- 第一步：确认线路 ---
+st.divider()
 st.subheader("1️⃣ 确认线路关键词")
-final_input = st.text_input("地点间用空格分隔（识别不准可在此手动修改）", value=identified_names)
+final_input = st.text_input("识别出的地名（如有误请在此手动增减）", value=identified_names)
 
-# --- 第二步：确认精确位置 ---
+# --- 第二步：精确选点 ---
 st.subheader("2️⃣ 确认精确位置")
 final_locations = []
-
 if final_input:
     names = final_input.split()
     for i, name in enumerate(names):
         try:
-            # 增加“江西”前缀提高搜索精度
-            search_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}&location=115.892151,28.676493" # 锁定江西坐标附近搜索
-            tips_res = requests.get(search_url).json()
-            tips = tips_res.get('tips', [])
+            # 增加江西区域偏好，避免搜到外省
+            search_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}&location=115.89,28.67"
+            tips = requests.get(search_url).json().get('tips', [])
+            options = [f"{t['name']} ({t.get('district','')})" for t in tips if t.get('location')]
+            if not options: options = [f"{name} (未搜到)"]
             
-            # 过滤掉没有坐标的结果
-            options = [f"{t['name']} ({t.get('district', '')})" for t in tips if t.get('name') and isinstance(t.get('location'), str)]
-
-            if not options:
-                options = [f"{name} (未搜索到，请修改关键词)"]
+            chosen = st.selectbox(f"📍 第{i+1}站: {name}", options, key=f"sel_{i}")
             
-            chosen = st.selectbox(f"📍 第{i+1}站 [{name}]", options, key=f"sel_{i}")
-            
+            # 拿坐标
             actual_name = chosen.split(" (")[0]
-            loc_data = next((t.get('location') for t in tips if t['name'] == actual_name and isinstance(t.get('location'), str)), None)
-            
-            if loc_data:
-                final_locations.append({"name": actual_name, "coord": loc_data})
-        except:
-            pass
+            loc = next((t['location'] for t in tips if t['name'] == actual_name), None)
+            if loc: final_locations.append({"name": actual_name, "coord": loc})
+        except: pass
 
-# --- 第三步：路径规划 ---
+# --- 第三步：测算 ---
 st.divider()
 auto_dist = 0
-
 if len(final_locations) >= 2:
-    try:
-        origin_coord = final_locations[0]['coord']
-        destination_coord = final_locations[-1]['coord']
-        waypoints = ";".join([l['coord'] for l in final_locations[1:-1]])
-        
-        route_url = f"https://restapi.amap.com/v3/direction/driving?origin={origin_coord}&destination={destination_coord}&key={AMAP_KEY}&strategy=2"
-        if waypoints:
-            route_url += f"&waypoints={waypoints}"
-            
-        route_res = requests.get(route_url).json()
-        if route_res['status'] == '1':
-            meters = int(route_res['route']['paths'][0]['distance'])
-            auto_dist = int(round(meters / 1000))
-            
-            route_flow = " ➡️ ".join([l['name'] for l in final_locations])
-            st.info(f"🗺️ 线路预览：{route_flow}")
-            st.success(f"✅ 自动测算里程：{auto_dist} KM")
-    except:
-        st.error("计算出错，请检查地点是否选择准确")
+    origin = final_locations[0]['coord']
+    dest = final_locations[-1]['coord']
+    ways = ";".join([l['coord'] for l in final_locations[1:-1]])
+    
+    route_url = f"https://restapi.amap.com/v3/direction/driving?origin={origin}&destination={dest}&key={AMAP_KEY}&strategy=2&waypoints={ways}"
+    r = requests.get(route_url).json()
+    if r['status'] == '1':
+        auto_dist = int(round(int(r['route']['paths'][0]['distance']) / 1000))
+        st.success(f"✅ 测算里程：{auto_dist} KM")
 
 # --- 第四步：报价 ---
 c1, c2 = st.columns(2)
 with c1:
-    final_km = st.number_input("里程修正", value=int(auto_dist), step=1)
+    final_km = st.number_input("里程修正", value=auto_dist, step=1)
 with c2:
-    days = st.number_input("用车天数", min_value=1, value=4, step=1) # 默认为4天行程
+    days = st.number_input("用车天数", min_value=1, value=4)
 
 f39 = int(final_km * p39 + days * b39)
 f56 = int(final_km * p56 + days * b56)
 
-st.table(pd.DataFrame({
-    "车型": ["39座", "56座"],
-    "里程": [f"{final_km} KM"] * 2,
-    "天数": [f"{days} 天"] * 2,
-    "总报价": [f"{f39} 元", f"{f56} 元"]
-}))
+st.table(pd.DataFrame({"车型":["39座","56座"], "里程":[f"{final_km}KM"]*2, "总报价":[f"{f39}元", f"{f56}元"]}))
 
 # 复制区域
 if final_locations:
     route_str = " - ".join([l['name'] for l in final_locations])
-    msg = f"【包车报价单】\n路线：{route_str}\n里程：约{final_km}公里\n天数：{days}天\n---\n39座报价：{f39}元\n56座报价：{f56}元\n(报价含路桥费，不含司机食宿)"
-    st.text_area("复制报价：", msg, height=130)
+    msg = f"【包车报价单】\n路线：{route_str}\n里程：约{final_km}公里\n天数：{days}天\n---\n39座：{f39}元\n56座：{f56}元"
+    st.text_area("复制文本：", msg)
