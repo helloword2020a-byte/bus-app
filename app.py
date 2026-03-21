@@ -6,16 +6,17 @@ import base64
 import json
 
 # ==================== 1. 核心密钥配置 ====================
-# 百度 OCR 密钥
+# 百度 OCR 密钥（已配置好）
 BAIDU_OCR_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"        
 BAIDU_OCR_SECRET = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
 
 # 百度千帆 AI 密钥 (已为您填入 API Key)
 AI_API_KEY = "bce-v3/ALTAK-9aoqLxWVRWAlk87GMFUI6/4bd21140ab38b1883ea5fa7608063fecf89c5bd2"
-# 👇 请在下面引号内填入您点击“显示”后看到的那串 Secret Key
-AI_SECRET_KEY = "bce-v3/ALTAK-9aoqLxWVRWAlk87GMFUI6/4bd21140ab38b1883ea5fa7608063fecf89c5bd2_Secret_Key" 
 
-# 高德地图密钥
+# 👇 请在下面引号内粘贴刚才复制的内容（通常是一串 32 位的随机字符）
+AI_SECRET_KEY = "在这里直接粘贴你刚才复制的SecretKey" 
+
+# 高德地图密钥（已配置好）
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
 st.set_page_config(page_title="九江祥隆报价系统-AI旗舰版", layout="wide")
@@ -37,7 +38,6 @@ if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
 
 def get_access_token(api_key, secret_key):
     """获取百度 API 访问凭证"""
-    # 百度 OAuth 2.0 标准接口
     url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
     try:
         res = requests.get(url).json()
@@ -57,9 +57,8 @@ def ocr_engine(file_bytes):
 def ai_extract_locations(text):
     """ERNIE-Speed-Pro-128K 智能提取地名"""
     token = get_access_token(AI_API_KEY, AI_SECRET_KEY)
-    if not token: return "AI 授权失败，请检查 Secret Key 是否填写"
+    if not token: return "AI 授权失败，请检查第 16 行 Secret Key"
     
-    # 调用的模型接口
     url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-pro-128k?access_token={token}"
     
     prompt = f"你是一个旅游调计。请从文字中提取纯地名，地名间用空格隔开。删掉动作词（如接、送、住、车程）。原文：{text}"
@@ -88,7 +87,6 @@ with st.sidebar:
     f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
     f_days = st.number_input("用车总天数 (天)", value=4)
     
-    # 报价计算逻辑
     res_39 = int(f_km * p39 + f_days * b39)
     res_56 = int(f_km * p56 + f_days * b56)
     
@@ -116,7 +114,7 @@ with m_left:
     
     raw_txt = st.text_area("识别文本校对：", value=st.session_state.get('ocr_raw', ""), height=120)
     
-    if st.button("✨ 大模型智能提取路径 (ERNIE 旗舰驱动)", use_container_width=True):
+    if st.button("✨ 大模型智能提取路径", use_container_width=True):
         if raw_txt:
             with st.spinner('AI 正在思考...'):
                 st.session_state['sites_final'] = ai_extract_locations(raw_txt)
@@ -151,6 +149,5 @@ with m_right:
             km_val = int(round(int(res['route']['paths'][0]['distance']) / 1000))
             st.session_state['km_auto'] = km_val
             st.success(f"🚩 路线规划成功！实测公里：{km_val} KM。")
-            st.info("数据已同步至左侧【实测总公里】，最终报价已刷新。")
         except:
             st.error("测距失败，请检查站点是否模糊")
