@@ -118,4 +118,28 @@ with m_right:
         grid = st.columns(2)
         for i, name in enumerate(names):
             with grid[i % 2]:
-                url = f
+                url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
+                try:
+                    tips = requests.get(url).json().get('tips', [])
+                    valid_tips = [t for t in tips if t.get('location')]
+                    if not valid_tips: continue
+                    
+                    # 下拉选择具体位置
+                    sel = st.selectbox(f"站点{i+1}: {name}", [f"{t['name']} ({t.get('district','')})" for t in valid_tips], key=f"sel_{i}")
+                    coord = next(t['location'] for t in valid_tips if t['name'] == sel.split(" (")[0])
+                    confirmed_locs.append(coord)
+                except: pass
+
+    if len(confirmed_locs) >= 2:
+        try:
+            org, des, way = confirmed_locs[0], confirmed_locs[-1], ";".join(confirmed_locs[1:-1])
+            r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way if len(confirmed_locs)>2 else ''}"
+            res = requests.get(r_url).json()
+            km_val = int(round(int(res['route']['paths'][0]['distance']) / 1000))
+            
+            # 同步至左侧侧边栏
+            st.session_state['km_auto'] = km_val
+            st.success(f"🚩 路线规划成功！实测公里：{km_val} KM。")
+            st.info("数据已同步至左侧【实测总公里】，最终报价已刷新。")
+        except:
+            st.error("地图测距失败，请微调站点名称")
