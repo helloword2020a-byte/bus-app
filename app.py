@@ -1,108 +1,145 @@
 import streamlit as st
-import requests
-import json
 import pandas as pd
+import requests
+import re
 import base64
 
-# ==================== 1. 密钥配置区 ====================
-# 百度千帆 API 密钥 (用于 AI 清洗地名)
-BAIDU_AI_KEY = "bce-v3/ALTAK-9aoqLxWVRWAlk87GMFUI6/4bd21140ab38b1883ea5fa7608063fecf89c5bd2"
-BAIDU_AI_SECRET = "这里请填入您在APIKey页面看到的Secret_Key" 
+# --- 1. 基础配置 ---
+BAIDU_API_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"       
+BAIDU_SECRET_KEY = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO" 
+AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
-# 百度 OCR 密钥 (用于图片转文字)
-BAIDU_OCR_KEY = "这里填入您的OCR_API_KEY"
-BAIDU_OCR_SECRET = "这里填入您的OCR_Secret_Key"
+st.set_page_config(page_title="九江祥隆报价系统-智能旗舰版", layout="wide")
 
-# 高德地图密钥 (用于精准测距)
-AMAP_KEY = "这里填入您的高德地图Key"
+# --- 2. 界面样式 ---
+st.markdown("""
+    <style>
+    .block-container {padding-top: 1rem !important;}
+    [data-testid="stSidebar"] {background-color: #f0f2f6; min-width: 250px;}
+    .q-table { font-size: 0.95rem; border-collapse: collapse; width: 100%; margin-top: 10px; border-radius: 8px; overflow: hidden;}
+    .q-table td, .q-table th { border: 1px solid #ddd; padding: 8px; text-align: center; }
+    .stNumberInput div div input { font-size: 1.1rem !important; color: #1e88e5 !important; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# ==================== 2. 核心功能组件 ====================
+if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
 
-def get_baidu_token(api_key, secret_key):
-    """获取百度通用访问权限"""
-    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
-    return requests.get(url).json().get("access_token")
+# --- 3. 百度 AI OCR 引擎 ---
+def get_baidu_token():
+    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_API_KEY}&client_secret={BAIDU_SECRET_KEY}"
+    try: return requests.get(url).json().get("access_token")
+    except: return None
 
-def ocr_image_to_text(image_bytes):
-    """【图片识别功能】将上传的截图转为文字"""
-    token = get_baidu_token(BAIDU_OCR_KEY, BAIDU_OCR_SECRET)
-    url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token={token}"
-    img_64 = base64.b64encode(image_bytes).decode("utf-8")
-    res = requests.post(url, data={"image": img_64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
-    return "\n".join([w['words'] for w in res.get('words_result', [])])
+def ocr_engine(file_bytes):
+    token = get_baidu_token()
+    if not token: return "授权失败"
+    img64 = base64.b64encode(file_bytes).decode()
+    url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={token}"
+    res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
+    # 核心：将所有识别块拼成一个完整长文本，解决跨行断字问题
+    return "".join([i['words'] for i in res.get('words_result', [])])
 
-def ai_clean_locations(raw_text):
-    """【AI 大脑】使用 ERNIE-Speed-Pro-128K 清洗地名，解决识别误差"""
-    token = get_baidu_token(BAIDU_AI_KEY, BAIDU_AI_SECRET)
-    url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-pro-128k?access_token={token}"
-    # 核心指令：剔除“接、送、住、车程”等干扰词
-    prompt = f"你是一个旅游调度。请从以下文字中只提取纯地名，删掉'接、送、住、玩、车程、约3h'。地名间用一个空格隔开。原文：{raw_text}"
-    payload = json.dumps({"messages": [{"role": "user", "content": prompt}]})
-    res = requests.post(url, data=payload, headers={'Content-Type': 'application/json'}).json()
-    return res.get("result", "").strip()
-
-def get_real_distance(clean_sites):
-    """【高德测距】基于清洗后的地名计算真实里程"""
-    # 逻辑：将 AI 提取的“南昌 葛仙村 望仙谷”传给高德规划路径
-    # 此处为示意逻辑，实际运行会调用高德 API
-    return 219.5 # 示例：过滤掉“理发店”干扰后的准确里程
-
-# ==================== 3. 界面布局 (Streamlit) ====================
-st.set_page_config(page_title="九江旅游车智能系统", layout="wide")
-st.title("🚌 九江旅游车智能报价系统 (全功能集成版)")
-
-# --- 左侧边栏：车型单价设置 ---
+# --- 4. 侧边栏：核心报价工作台 ---
 with st.sidebar:
-    st.header("📊 车型单价设置")
-    price_39 = st.number_input("39座单价 (元/公里)", value=15.00, step=0.5)
-    price_56 = st.number_input("56座单价 (元/公里)", value=18.00, step=0.5)
-    st.markdown("---")
-    st.success("已启用 AI 模型: ERNIE-Speed-Pro-128K")
-
-# --- 主界面：功能分栏 ---
-col1, col2 = st.columns([1, 1.2])
-
-with col1:
-    st.subheader("1. 录入行程信息")
-    # A. 上传图片识别
-    file = st.file_uploader("上传行程截图识别", type=['png', 'jpg', 'jpeg'])
+    st.header("📊 报价核算中心")
     
-    # 如果上传了图片，自动触发 OCR
-    if file and 'ocr_result' not in st.session_state:
-        with st.spinner('正在识别图片文字...'):
-            text = ocr_image_to_text(file.read())
-            st.session_state['ocr_result'] = text
+    with st.expander("⚙️ 计费标准设置", expanded=False):
+        c1, c2 = st.columns(2)
+        b39 = c1.number_input("39座起步", value=800)
+        p39 = c2.number_input("39座单价", value=2.6)
+        b56 = c1.number_input("56座起步", value=1000)
+        p56 = c2.number_input("56座单价", value=3.6)
+
+    st.divider()
+    st.subheader("📝 核心报单参数")
+    f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
+    f_days = st.number_input("用车总天数 (天)", value=4)
+    
+    # 实时计算报价
+    res_39 = int(f_km * p39 + f_days * b39)
+    res_56 = int(f_km * p56 + f_days * b56)
+    
+    st.markdown("### 💰 实时总报单")
+    st.markdown(f"""
+    <table class="q-table">
+        <tr style="background-color:#1e88e5; color:white;"><th>车型</th><th>总报价</th></tr>
+        <tr><td>39座大巴</td><td><b>{res_39} 元</b></td></tr>
+        <tr><td>56座大巴</td><td><b>{res_56} 元</b></td></tr>
+    </table>
+    """, unsafe_allow_html=True)
+    st.caption(f"详情：{f_km}KM × 单价 + {f_days}天 × 起步费")
+
+# --- 5. 主页面布局 ---
+st.header("🚌 九江祥隆旅游运输报价系统 (AI 旗舰版)")
+m_left, m_right = st.columns([1, 1.2])
+
+with m_left:
+    st.markdown("### 1️⃣ 行程 AI 智能识别")
+    up_file = st.file_uploader("粘贴或上传行程截图", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
+    if up_file:
+        img_bytes = up_file.read()
+        st.image(img_bytes, width=320)
+        if st.button("🚀 开始高精度全文识别", use_container_width=True):
+            st.session_state['ocr_raw'] = ocr_engine(img_bytes)
+    
+    raw_txt = st.text_area("识别文本校对：", value=st.session_state.get('ocr_raw', ""), height=150)
+    
+    if st.button("✨ 智能提取所有地名 (测试成功版)", use_container_width=True):
+        if raw_txt:
+            # --- 智能清洗逻辑 ---
+            text = raw_txt
+            # 1. 强力剔除干扰词
+            noise = [r"第\d+天", r"行程", r"简易", r"车程约?[\d\.h小时]+", r"住[^\s，。]*", r"含早", r"下午", r"上午", r"抵达", r"集合", r"游览", r"返回", r"前往", r"结束", r"返程"]
+            for n in noise: text = re.sub(n, " ", text)
             
-    # B. 文字输入框 (自动填充 OCR 结果)
-    final_input = st.text_area("或手动输入/修改行程：", 
-                              value=st.session_state.get('ocr_result', "南昌接 前往大觉山 住大觉山"), 
-                              height=200)
-    
-    calculate_btn = st.button("🚀 开始智能分析并报价")
-
-with col2:
-    st.subheader("2. 识别结果与详细报价")
-    if calculate_btn:
-        if "填入" in BAIDU_AI_SECRET:
-            st.error("❌ 请先在代码中填入您的 Secret Key！")
+            # 2. 提取 2-6 个中文字符，并清洗特定的动作词后缀
+            found = re.findall(r'[\u4e00-\u9fa5]{2,6}', text)
+            stop_words = ["可以", "需要", "提示", "进行", "地点", "时间", "到达", "出发", "景区"]
+            
+            clean_sites = []
+            for w in found:
+                # 剔除关键词里的“接”和“送”，比如“南昌接”变为“南昌”
+                w_clean = w.replace("接", "").replace("送", "")
+                if w_clean not in stop_words and len(w_clean) > 1:
+                    if w_clean not in clean_sites: clean_sites.append(w_clean)
+            
+            st.session_state['sites_final'] = " ".join(clean_sites)
         else:
-            with st.spinner('AI 正在清洗路径并核算里程...'):
-                # 1. AI 清洗
-                clean_text = ai_clean_locations(final_input)
-                # 2. 高德测距
-                dist = get_real_distance(clean_text)
-                
-                # 展示核心数据
-                st.write(f"**✨ AI 提取纯路径：** `{clean_text}`")
-                st.metric("预估总里程", f"{dist} 公里")
-                
-                # 3. 自动生成报价单
-                st.write("### 💰 车型实时报价单")
-                data = {
-                    "建议车型": ["39座中巴车", "56座大巴车"],
-                    "单价标准": [f"{price_39} 元/km", f"{price_56} 元/km"],
-                    "预计总价": [f"¥{dist * price_39:.0f}", f"¥{dist * price_56:.0f}"],
-                    "备注": ["路桥油全包", "路桥油全包"]
-                }
-                st.table(pd.DataFrame(data))
-                st.info("💡 系统已自动识别并剔除‘接、送、住’等词汇，测距结果已避开同名理发店等干扰。")
+            st.error("请先识别行程文字")
+
+with m_right:
+    st.markdown("### 2️⃣ 站点确认与地图测距")
+    st.caption("提示：可在下方框内直接删减不相关的字，地图会实时重算距离。")
+    site_input = st.text_input("待匹配关键词：", value=st.session_state.get('sites_final', ""), label_visibility="collapsed")
+    
+    confirmed_locs = []
+    if site_input:
+        names = site_input.split()
+        grid = st.columns(2)
+        for i, name in enumerate(names):
+            with grid[i % 2]:
+                url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
+                try:
+                    tips = requests.get(url).json().get('tips', [])
+                    valid_tips = [t for t in tips if t.get('location')]
+                    if not valid_tips: continue
+                    
+                    # 下拉选择具体位置
+                    sel = st.selectbox(f"站点{i+1}: {name}", [f"{t['name']} ({t.get('district','')})" for t in valid_tips], key=f"sel_{i}")
+                    coord = next(t['location'] for t in valid_tips if t['name'] == sel.split(" (")[0])
+                    confirmed_locs.append(coord)
+                except: pass
+
+    if len(confirmed_locs) >= 2:
+        try:
+            org, des, way = confirmed_locs[0], confirmed_locs[-1], ";".join(confirmed_locs[1:-1])
+            r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way if len(confirmed_locs)>2 else ''}"
+            res = requests.get(r_url).json()
+            km_val = int(round(int(res['route']['paths'][0]['distance']) / 1000))
+            
+            # 同步至左侧侧边栏
+            st.session_state['km_auto'] = km_val
+            st.success(f"🚩 路线规划成功！实测公里：{km_val} KM。")
+            st.info("数据已同步至左侧【实测总公里】，最终报价已刷新。")
+        except:
+            st.error("地图测距失败，请微调站点名称")
