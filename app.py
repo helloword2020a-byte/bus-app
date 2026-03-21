@@ -10,7 +10,7 @@ import json
 BAIDU_OCR_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"        
 BAIDU_OCR_SECRET = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
 
-# 百度千帆 AI 密钥（已为您填入最新生成的子用户凭证）
+# 百度千帆 AI 密钥（子用户 AccessKey 凭证）
 AI_API_KEY = "ALTAKRoF5rezfzpBHyvueydG2B"
 AI_SECRET_KEY = "10bc499df39a472d882aee64221d1e31" 
 
@@ -53,11 +53,12 @@ def ocr_engine(file_bytes):
     return "".join([i['words'] for i in res.get('words_result', [])])
 
 def ai_extract_locations(text):
-    """ERNIE-Speed-Pro-128K 智能提取地名"""
+    """ERNIE-X1-Turbo-32K 智能提取地名"""
     token = get_access_token(AI_API_KEY, AI_SECRET_KEY)
     if not token: return "AI 授权失败，请检查密钥"
     
-    url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-pro-128k?access_token={token}"
+    # 此处已修改为对应的 ERNIE-X1-Turbo-32K 模型地址
+    url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-x1-turbo-32k?access_token={token}"
     
     prompt = f"你是一个旅游调计。请从文字中提取纯地名，地名间用空格隔开。删掉动作词（如接、送、住、车程）。原文：{text}"
     
