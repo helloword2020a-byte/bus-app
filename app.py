@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 
 st.set_page_config(page_title="包车报价系统", layout="wide")
-st.title("🚌 包车报价系统（选点加强修复版）")
+st.title("🚌 包车报价系统（路径纠偏版）")
 
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74" 
 
@@ -34,21 +34,20 @@ if raw_input:
                 tips_res = requests.get(search_url).json()
                 tips = tips_res.get('tips', [])
                 
-                # 即使没有坐标也先列出来，方便用户看
-                options = [f"{t['name']} ({t.get('district', '')})" for t in tips if t.get('name')]
+                # 过滤出有明确名称和坐标的选项
+                options = [f"{t['name']} ({t.get('district', '')})" for t in tips if t.get('name') and t.get('location')]
                 
                 if not options:
                     options = [f"{name} (请检查输入)"]
                 
                 chosen = st.selectbox(f"第{i+1}站", options, key=f"sel_{i}")
                 
-                # --- 核心修复：二次获取坐标 ---
+                # 获取坐标
                 actual_name = chosen.split(" (")[0]
-                # 尝试从tips里找坐标，如果选中的tip没坐标，就用地理编码接口查一下
                 loc_data = next((t.get('location') for t in tips if t['name'] == actual_name and t.get('location')), None)
                 
+                # 二次查询坐标补丁
                 if not loc_data:
-                    # 如果tips里没坐标，强制走一次地理编码
                     geo_url = f"https://restapi.amap.com/v3/geocode/geo?address={chosen}&key={AMAP_KEY}"
                     geo_res = requests.get(geo_url).json()
                     if geo_res.get('geocodes'):
@@ -59,18 +58,18 @@ if raw_input:
             except:
                 pass
 
-# --- 第三步：路径规划 ---
+# --- 第三步：路径规划与纠偏 ---
 st.divider()
 auto_dist = 0
 
-# 只有当所有输入的地点都成功获取到坐标时，才开始计算
 if len(final_locations) == len(raw_input.split()) and len(final_locations) >= 2:
     try:
+        # 严格按照顺序提取坐标
         origin = final_locations[0]['coord']
         destination = final_locations[-1]['coord']
         waypts = ";".join([l['coord'] for l in final_locations[1:-1]])
         
-        # strategy=2 距离优先
+        # 改进策略：strategy=2 (距离优先，尽量走直线/最短)
         route_url = f"https://restapi.amap.com/v3/direction/driving?origin={origin}&destination={destination}&key={AMAP_KEY}&strategy=2"
         if waypts:
             route_url += f"&waypoints={waypts}"
@@ -79,18 +78,22 @@ if len(final_locations) == len(raw_input.split()) and len(final_locations) >= 2:
         if route_res['status'] == '1':
             meters = int(route_res['route']['paths'][0]['distance'])
             auto_dist = int(round(meters / 1000))
-            st.success(f"✅ 路线计算成功：全程约 {auto_dist} 公里")
+            
+            # 路线逻辑检查：显示完整线路顺序
+            route_flow = " ➡️ ".join([l['name'] for l in final_locations])
+            st.info(f"📍 规划线路：{route_flow}")
+            st.success(f"✅ 测算里程：{auto_dist} 公里")
         else:
-            st.error(f"高德接口报错：{route_res.get('info')}")
+            st.error(f"高德接口返回错误：{route_res.get('info')}")
     except Exception as e:
-        st.error(f"计算过程出错")
+        st.error(f"里程计算中断，请检查地点是否选择正确")
 else:
-    st.info("💡 请确保上方每个地点的下拉框都已加载并选择了正确的具体位置。")
+    st.warning("⚠️ 请确保上方每个下拉框都已选定具体的地点，目前正在等待选点...")
 
-# --- 报价展示 ---
+# --- 第四步：报价与输出 ---
 c1, c2 = st.columns(2)
 with c1:
-    final_km = st.number_input("最终公里数", value=int(auto_dist), step=1)
+    final_km = st.number_input("最终确认公里数", value=int(auto_dist), step=1)
 with c2:
     days = st.number_input("用车天数", min_value=1, value=1, step=1)
 
@@ -103,8 +106,8 @@ st.table(pd.DataFrame({
     "总报价": [f"{fee_39} 元", f"{fee_56} 元"]
 }))
 
-# 微信复制
+# 复制文本
 if final_locations:
     route_display = " - ".join([l['name'] for l in final_locations])
-    wx_msg = f"【包车报价单】\n路线：{route_display}\n里程：约{final_km}公里\n天数：{days}天\n---\n39座：{fee_39}元\n56座：{fee_56}元\n(含路桥费，不含食宿)"
-    st.text_area("微信报价文本：", wx_msg, height=150)
+    wx_msg = f"【包车报价单】\n路线：{route_display}\n路程：约{final_km}公里\n天数：{days}天\n---\n39座：{fee_39}元\n56座：{fee_56}元\n(报价含路桥费，不含司机食宿)"
+    st.text_area("点击下方框内全选复制：", wx_msg, height=150)
