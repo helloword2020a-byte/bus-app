@@ -64,4 +64,58 @@ with m_left:
     if st.button("✨ 智能提取行程地名", use_container_width=True):
         raw = text_edit
         # 清洗掉干扰词
-        noise = [r"第\d+天", r"行程", r"简易", r"车程约?[\d\.h小时]+", r"住[^\s，。]*", r"前往", r"接引", r"返程", r"
+        noise = [r"第\d+天", r"行程", r"简易", r"车程约?[\d\.h小时]+", r"住[^\s，。]*", r"前往", r"接引", r"返程", r"结束", r"含早", r"下午", r"上午", r"接$", r"送$"]
+        for p in noise: raw = re.sub(p, " ", raw)
+        found = re.findall(r'[\u4e00-\u9fa5]{2,6}', raw)
+        stop_words = ["可以", "需要", "提示", "进行", "返回", "地点", "时间", "到达", "游览", "早餐", "晚餐"]
+        seen = set()
+        clean_sites = [w for w in found if w not in stop_words and len(w) > 1 and not (w in seen or seen.add(w))]
+        st.session_state['sites_final'] = " ".join(clean_sites)
+
+with m_right:
+    st.subheader("2️⃣ 站点与报价")
+    site_str = st.text_input("识别出的关键词（空格分隔）：", value=st.session_state.get('sites_final', ""), label_visibility="collapsed")
+    
+    loc_data = []
+    if site_str:
+        names = site_str.split()
+        grid = st.columns(2)
+        for i, name in enumerate(names):
+            with grid[i % 2]:
+                # 修改：移除 &city=江西，实现全国搜索
+                search_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
+                try:
+                    tips = requests.get(search_url).json().get('tips', [])
+                    opts = [f"{t['name']} ({t.get('district','')})" for t in tips if t.get('location')]
+                    
+                    sel = st.selectbox(f"站点{i+1}: {name}", opts or [f"{name}(未搜到)"], key=f"site_{i}")
+                    coord = next((t['location'] for t in tips if t['name'] == sel.split(" (")[0]), None)
+                    if coord: loc_data.append(coord)
+                except: st.error(f"{name} 搜索超时")
+
+    if len(loc_data) >= 2:
+        try:
+            # 计算全国路径
+            org, des, way = loc_data[0], loc_data[-1], ";".join(loc_data[1:-1])
+            r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way}"
+            res = requests.get(r_url).json()
+            km = int(round(int(res['route']['paths'][0]['distance']) / 1000))
+            
+            st.divider()
+            c1, c2 = st.columns(2)
+            f_km = c1.number_input("实测公里 (KM)", value=km)
+            days = c2.number_input("用车天数 (天)", value=4, min_value=1)
+            
+            p39 = int(f_km * price_39 + days * base_39)
+            p56 = int(f_km * price_56 + days * base_56)
+            
+            # 紧凑结果展示
+            st.dataframe(pd.DataFrame({
+                "车型": ["39座大巴", "56座大巴"], 
+                "报价": [f"{p39} 元", f"{p56} 元"],
+                "计算详情": [f"{f_km}KM × {price_39} + {days}天 × {base_39}", 
+                           f"{f_km}KM × {price_56} + {days}天 × {base_56}"]
+            }), use_container_width=True, hide_index=True)
+            
+            st.success(f"📍 路径已生成，总计覆盖 {len(loc_data)} 个站点。")
+        except: st.warning("请校对以上站点名，确保所有站点都匹配到了具体位置。")
