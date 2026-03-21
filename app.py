@@ -11,10 +11,10 @@ BAIDU_OCR_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"
 BAIDU_OCR_SECRET = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
 
 # 百度千帆 AI 密钥 (已为您填入 API Key)
-AI_API_KEY = "bce-v3/ALTAK-9aoqLxWVRWAlk87GMFUI6/4bd21140ab38b1883ea5fa7608063fecf89c5bd2"
+AI_API_KEY = ""ALTAKRoF5rezfzpBHyvueydG2B"
 
 # 👇 请在下面引号内粘贴刚才复制的内容（通常是一串 32 位的随机字符）
-AI_SECRET_KEY = "在这里直接粘贴你刚才复制的SecretKey" 
+AI_SECRET_KEY = "10bc499df39a472d882aee64221d1e31" 
 
 # 高德地图密钥（已配置好）
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
