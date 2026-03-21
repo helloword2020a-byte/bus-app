@@ -4,8 +4,8 @@ import requests
 import re
 
 # 页面基础配置
-st.set_page_config(page_title="包车报价系统-智能版", layout="wide")
-st.title("🚌 包车报价系统（智能识别+紧凑版）")
+st.set_page_config(page_title="包车报价系统-精准识别版", layout="wide")
+st.title("🚌 包车报价系统（智能识别优化版）")
 
 # --- 高德 Key ---
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74" 
@@ -17,32 +17,48 @@ p56 = st.sidebar.number_input("56座单价 (元/公里)", value=3.6)
 b39 = st.sidebar.number_input("39座起步费 (元/天)", value=800.0)
 b56 = st.sidebar.number_input("56座起步费 (元/天)", value=1000.0)
 
-# --- 新功能：智能行程提取 ---
-st.subheader("🚀 智能行程识别")
-st.info("💡 就像快递单识别一样，直接粘贴一段文字行程，我会尝试提取地名。")
-smart_text = st.text_area("请粘贴您的行程描述（例如：第一天南昌出发，下午到大觉山...）", height=100)
-
-# 自动提取逻辑
-suggested_names = ""
-if smart_text:
-    # 简单的正则提取（进阶版通常需要调用专门的NLP接口，这里先做逻辑过滤）
-    # 过滤掉常见干扰字词
-    noise_words = ["出发", "到达", "玩", "去", "然后", "到", "回", "几天", "第一天", "第二天", "下午", "上午", "我们要", "住"]
-    clean_text = smart_text
-    for word in noise_words:
-        clean_text = clean_text.replace(word, " ")
+# --- 智能行程提取函数 (核心优化) ---
+def smart_extract(text):
+    if not text: return ""
+    # 1. 彻底剔除行程单中的干扰词
+    noise = [
+        r"第\d+天", r"车程约[\d\.]+h", r"住[^\s]+", r"下午", r"上午", r"中午", r"晚上",
+        r"前往", r"返回", r"返程", r"接", r"送", r"简易行程", r"行程", r"约", r"h",
+        r"小时", r"车程", r"时间", r"入住"
+    ]
+    temp_text = text
+    for n in noise:
+        temp_text = re.sub(n, " ", temp_text)
     
-    # 提取2个字以上的词作为地名候选
-    extracted = re.findall(r'[\u4e00-\u9fa5]{2,}', clean_text)
-    suggested_names = " ".join(extracted)
-    st.success(f"🔍 识别到地名关键词：{suggested_names}")
+    # 2. 提取2-6字的汉字词（通常是地名）
+    raw_words = re.findall(r'[\u4e00-\u9fa5]{2,6}', temp_text)
+    
+    # 3. 二次清理：剔除“前往”、“接引”这种动词或干扰词
+    forbidden = ["前往", "接引", "提示", "地址", "路线", "时间", "价格"]
+    clean_words = [w for w in raw_words if w not in forbidden]
+    
+    # 4. 去重并保持顺序
+    result = []
+    for w in clean_words:
+        if w not in result:
+            result.append(w)
+    return " ".join(result)
+
+# --- 界面布局 ---
+st.subheader("🚀 智能行程识别")
+smart_text = st.text_area("请直接粘贴行程文本：", height=150, placeholder="例如：4.11 南昌接 前往大觉山...")
+
+# 执行识别
+identified_names = smart_extract(smart_text)
+
+if smart_text:
+    st.success(f"🔍 自动提取地名：{identified_names}")
 
 # --- 第一步：确认输入 ---
 st.subheader("1️⃣ 确认线路关键词")
-# 如果有智能识别的结果，优先填充
-final_input = st.text_input("地点间用空格分隔（识别不准可在此手动修改）", value=suggested_names if suggested_names else "南昌昌北国际机场 大觉山 葛仙村 篁岭 景德镇 南昌昌北国际机场")
+final_input = st.text_input("地点间用空格分隔（识别不准可在此手动修改）", value=identified_names)
 
-# --- 第二步：确认精确位置（紧凑布局） ---
+# --- 第二步：确认精确位置 ---
 st.subheader("2️⃣ 确认精确位置")
 final_locations = []
 
@@ -50,20 +66,21 @@ if final_input:
     names = final_input.split()
     for i, name in enumerate(names):
         try:
-            search_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
+            # 增加“江西”前缀提高搜索精度
+            search_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}&location=115.892151,28.676493" # 锁定江西坐标附近搜索
             tips_res = requests.get(search_url).json()
             tips = tips_res.get('tips', [])
             
-            options = [f"{t['name']} ({t.get('district', '')})" for t in tips if t.get('name') and t.get('location')]
+            # 过滤掉没有坐标的结果
+            options = [f"{t['name']} ({t.get('district', '')})" for t in tips if t.get('name') and isinstance(t.get('location'), str)]
 
             if not options:
-                options = [f"{name} (未搜索到，请手动修改输入)"]
+                options = [f"{name} (未搜索到，请修改关键词)"]
             
-            # 紧凑排列
             chosen = st.selectbox(f"📍 第{i+1}站 [{name}]", options, key=f"sel_{i}")
             
             actual_name = chosen.split(" (")[0]
-            loc_data = next((t.get('location') for t in tips if t['name'] == actual_name and t.get('location')), None)
+            loc_data = next((t.get('location') for t in tips if t['name'] == actual_name and isinstance(t.get('location'), str)), None)
             
             if loc_data:
                 final_locations.append({"name": actual_name, "coord": loc_data})
@@ -74,7 +91,7 @@ if final_input:
 st.divider()
 auto_dist = 0
 
-if len(final_locations) == len(final_input.split()) and len(final_locations) >= 2:
+if len(final_locations) >= 2:
     try:
         origin_coord = final_locations[0]['coord']
         destination_coord = final_locations[-1]['coord']
@@ -93,14 +110,14 @@ if len(final_locations) == len(final_input.split()) and len(final_locations) >= 
             st.info(f"🗺️ 线路预览：{route_flow}")
             st.success(f"✅ 自动测算里程：{auto_dist} KM")
     except:
-        st.error("里程计算出错")
+        st.error("计算出错，请检查地点是否选择准确")
 
 # --- 第四步：报价 ---
 c1, c2 = st.columns(2)
 with c1:
     final_km = st.number_input("里程修正", value=int(auto_dist), step=1)
 with c2:
-    days = st.number_input("用车天数", min_value=1, value=1, step=1)
+    days = st.number_input("用车天数", min_value=1, value=4, step=1) # 默认为4天行程
 
 f39 = int(final_km * p39 + days * b39)
 f56 = int(final_km * p56 + days * b56)
