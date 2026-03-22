@@ -7,17 +7,12 @@ import re
 
 # ==================== 1. 核心密钥配置 ====================
 
-# [核对] 请确保此 Key 与你百度后台 [V2版本] 的 API Key 一致
 AI_API_KEY_V2 = "bce-v3/ALTAK-EMZixkEbLJ0iEkFcaJCFc/74514893890101d198dd642b3b95ea68bed95897"
-
-# 百度 OCR 密钥
 BAIDU_OCR_AK = "1vBiCqNtSYFRx6GYsGwpwXdM"         
 BAIDU_OCR_SK = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
-
-# 高德地图密钥
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
-st.set_page_config(page_title="九江祥隆报价系统-AI旗舰版", layout="wide")
+st.set_page_config(page_title="九江祥隆旅游运输报价系统", layout="wide")
 
 # ==================== 2. 功能引擎 ====================
 
@@ -34,26 +29,22 @@ def ocr_engine(file_bytes):
     img64 = base64.b64encode(file_bytes).decode()
     url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={token}"
     try:
-        res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
+        res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-form-urlencoded'}).json()
         return "".join([i['words'] for i in res.get('words_result', [])])
     except: return "识别异常"
 
 def ai_extract_locations_v2(text):
-    """强化版：地毯式搜索行程中所有地名，重点捕获文末景点"""
+    """强化版：强制识别所有地点，包括末尾的返程点"""
     url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-pro-128k"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {AI_API_KEY_V2}"
-    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {AI_API_KEY_V2}"}
     
-    # 终极版 Prompt：明确要求拆分连字地名，不准漏掉结尾
     prompt = (
-        f"你是一个专业的旅游行程分析专家。请从以下文本中提取【所有】涉及的地名、城市或景点名称。\n"
-        f"特别注意：不要漏掉文末提到的‘返程点’或‘途径景点’（如：陶阳里、滕王阁、南昌）。\n"
-        f"要求：\n"
-        f"1. 只输出地名，地名之间用【空格】分隔。\n"
-        f"2. 严禁输出数字序号、标点符号或‘目的地：’等废话。\n"
-        f"3. 若景点连在一起（如：陶阳里滕王阁），请务必拆分为‘陶阳里 滕王阁’。\n"
+        f"你是一个旅游行程专家。请提取以下文本中提到的所有【地名】或【城市名】。\n"
+        f"特别指令：\n"
+        f"1. 严禁漏掉结尾处的城市名（如：南昌）。\n"
+        f"2. 即使原文是'返程'、'回南昌'，也请提取出'南昌'两个字。\n"
+        f"3. 必须拆分连字符或紧凑地名（如：陶阳里滕王阁 -> 陶阳里 滕王阁）。\n"
+        f"4. 只输出纯地名，空格分隔，不输出任何其他字。\n"
         f"原文：{text}"
     )
     
@@ -61,34 +52,30 @@ def ai_extract_locations_v2(text):
     try:
         response = requests.post(url, headers=headers, json=payload)
         res = response.json()
-        if "error_code" in res:
-            return f"AI 错误({res['error_code']}): {res.get('error_msg')}"
-        
         raw_result = res.get("result", "").strip()
-        
-        # 二次强力清洗：删掉数字和干扰动词
+        # 二次清洗
         clean_text = re.sub(r'\d+', ' ', raw_result)
-        for junk in ["目的地", "地名", "地点", "：", ":", ".", "、", "住", "前往", "返程", "车程"]:
+        for junk in ["目的地", "地名", "：", ":", ".", "、", "住", "前往", "回", "返程"]:
             clean_text = clean_text.replace(junk, " ")
-            
-        return " ".join(clean_text.split()) # 确保空格干净
-    except: return "AI 连接失败"
+        return " ".join(clean_text.split())
+    except: return "AI 解析失败"
 
-# ==================== 3. 侧边栏：实时报价计费 ====================
+# ==================== 3. 侧边栏：实时报价核算 ====================
 
 if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
 
 with st.sidebar:
     st.header("📊 报价核算中心")
-    with st.expander("⚙️ 计费标准设置", expanded=False):
-        c1, c2 = st.columns(2)
-        b39 = c1.number_input("39座起步费", value=800)
-        p39 = c2.number_input("39座单价", value=2.6)
-        b56 = c1.number_input("56座起步费", value=1000)
-        p56 = c2.number_input("56座单价", value=3.6)
+    
+    # --- 需求修改 1：计费标准不再折叠 ---
+    st.subheader("⚙️ 计费标准设置")
+    col_a, col_b = st.columns(2)
+    b39 = col_a.number_input("39座起步费", value=800)
+    p39 = col_b.number_input("39座单价", value=2.6)
+    b56 = col_a.number_input("56座起步费", value=1000)
+    p56 = col_b.number_input("56座单价", value=3.6)
 
     st.divider()
-    # 接收地图测距结果
     f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
     f_days = st.number_input("用车总天数 (天)", value=4)
     
@@ -98,6 +85,20 @@ with st.sidebar:
     st.markdown("### 💰 实时总报单")
     st.success(f"**39座大巴总价：{res_39} 元**")
     st.info(f"**56座大巴总价：{res_56} 元**")
+
+    # --- 需求修改 2：增加可复制的文本区域 ---
+    st.divider()
+    st.markdown("📝 **报价结果（直接复制发送）**")
+    quote_text = (
+        f"【九江祥隆旅游运输报价单】\n"
+        f"总里程：{f_km} KM\n"
+        f"用车天数：{f_days} 天\n"
+        f"--------------------\n"
+        f"🚌 39座大巴：{res_39} 元\n"
+        f"🚌 56座大巴：{res_56} 元\n"
+        f"注：以上价格包含车辆燃油费、路桥费、司机工资。"
+    )
+    st.text_area("复制下方文字：", value=quote_text, height=180)
 
 # ==================== 4. 主页面：流程操作 ====================
 
@@ -118,10 +119,10 @@ with m_left:
     
     if st.button("✨ 大模型智能解析路径", use_container_width=True):
         if raw_txt:
-            with st.spinner('AI 正在捕获所有景点...'):
+            with st.spinner('AI 正在捕获所有站点...'):
                 st.session_state['sites_final'] = ai_extract_locations_v2(raw_txt)
         else:
-            st.warning("请先通过图片识别或手动输入文字")
+            st.warning("请上传截图或输入文字")
 
 with m_right:
     st.markdown("### 2️⃣ 站点确认与地图测距")
@@ -132,22 +133,19 @@ with m_right:
         names = site_input.split()
         for i, name in enumerate(names):
             if not name.strip(): continue
-            # 调用高德 API 搜索地点建议
             url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
             try:
                 tips = requests.get(url).json().get('tips', [])
                 valid_tips = [t for t in tips if t.get('location')]
                 if valid_tips:
-                    # 每一站让用户确认具体经纬度点
                     sel = st.selectbox(f"确认第 {i+1} 站: {name}", 
                                       [f"{t['name']} ({t.get('district','')})" for t in valid_tips], 
-                                      key=f"st_sel_{i}")
+                                      key=f"st_sel_v3_{i}")
                     s_name = sel.split(" (")[0]
                     coord = next(t['location'] for t in valid_tips if t['name'] == s_name)
                     confirmed_locs.append(coord)
             except: pass
 
-    # 路径测距逻辑
     if len(confirmed_locs) >= 2:
         st.divider()
         org, des = confirmed_locs[0], confirmed_locs[-1]
@@ -157,11 +155,9 @@ with m_right:
         try:
             res = requests.get(r_url).json()
             if res['status'] == '1' and res['route']['paths']:
-                dist_m = int(res['route']['paths'][0]['distance'])
-                km = int(round(dist_m / 1000))
+                km = int(round(int(res['route']['paths'][0]['distance']) / 1000))
                 st.session_state['km_auto'] = km
-                st.success(f"🚩 路径规划成功！总公里数：{km} KM")
-                if st.button("✅ 更新至报价单"): st.rerun()
-            else:
-                st.error("测距失败，请检查站点是否选择准确")
-        except: st.error("地图接口连接异常")
+                st.success(f"🚩 规划成功！总里程：{km} KM")
+                if st.button("✅ 同步至报价单"): st.rerun()
+            else: st.error("地图测距失败，请检查站点是否选择准确")
+        except: st.error("地图服务异常")
