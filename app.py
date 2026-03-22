@@ -139,4 +139,69 @@ with m_left:
     up_file = st.file_uploader("上传截图", type=["jpg", "png", "jpeg"])
     if up_file:
         img_bytes = up_file.read()
-        st.image(img_bytes, width=30
+        st.image(img_bytes, width=300)
+        if st.button("🚀 开始文字提取识别", use_container_width=True):
+            with st.spinner('文字提取中...'):
+                st.session_state['ocr_raw'] = ocr_engine(img_bytes)
+    
+    raw_txt = st.text_area("校对文本框 (如要改顺序请改这里)：", value=st.session_state.get('ocr_raw', ""), height=150)
+    
+    st.markdown("---")
+    # 需求修改 3：保留两个提取方案
+    st.markdown("#### **站点提取方案选择**")
+    c1, c2 = st.columns(2)
+    
+    if c1.button("✨ 智能 AI 提取", use_container_width=True):
+        if raw_txt:
+            with st.spinner('大模型正在智能读心提取所有地名...'):
+                st.session_state['sites_final'] = ai_extract_locations_v2(raw_txt)
+        else:
+            st.warning("请先提取文字")
+
+    if c2.button("🤖 自动(规则)提取", use_container_width=True):
+        if raw_txt:
+            st.session_state['sites_final'] = rule_extract_locations(raw_txt)
+        else:
+            st.warning("请先提取文字")
+
+with m_right:
+    st.markdown("### 2️⃣ 站点确认与地图测距")
+    # 这就是你今天发的那段干净的结果，代码会自动填到这里
+    site_input = st.text_input("待匹配关键词 (空格隔开，AI提取的站点会在这里排队)：", value=st.session_state.get('sites_final', ""))
+    
+    confirmed_locs = []
+    if site_input:
+        # 去掉自动识别中可能带入的标点
+        clean_site_input = site_input.replace(",", " ").replace("，", " ")
+        names = clean_site_input.split()
+        for i, name in enumerate(names):
+            if not name.strip(): continue
+            url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
+            try:
+                tips = requests.get(url).json().get('tips', [])
+                valid_tips = [t for t in tips if t.get('location')]
+                if valid_tips:
+                    # 分站确认下拉框
+                    sel = st.selectbox(f"确认第 {i+1} 站: {name}", [f"{t['name']} ({t.get('district','')})" for t in valid_tips], key=f"site_sel_{i}")
+                    coord = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
+                    confirmed_locs.append(coord)
+            except: pass
+
+    # 需求修改 4：去掉按钮，直接显示计算出的公里数
+    if len(confirmed_locs) >= 2:
+        org, des = confirmed_locs[0], confirmed_locs[-1]
+        way = ";".join(confirmed_locs[1:-1])
+        r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way if way else ''}"
+        
+        try:
+            res = requests.get(r_url).json()
+            if res['status'] == '1' and res['route']['paths']:
+                km_val = int(round(int(res['route']['paths'][0]['distance']) / 1000))
+                
+                # 存入 session_state 触发左侧报价单更新
+                st.session_state['km_auto'] = km_val
+                st.success(f"🚩 规划成功！实测公里数：{km_val} KM。报价已实时更新！")
+            else:
+                st.error("高德地图无法计算此路径，请检查站点模糊。")
+        except:
+            st.error("地图测距服务异常，请检查高德 KEY。")
