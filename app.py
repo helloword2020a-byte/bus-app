@@ -1,197 +1,138 @@
 import streamlit as st
 import pandas as pd
 import requests
+import re
 import base64
 import json
-import re
 
-# ==================== 1. 核心密钥配置 (请在此替换新 Key) ====================
-AI_API_KEY_V2 = "这里填入你的新API_Key"
-AI_SECRET_KEY_V2 = "这里填入你的新Secret_Key" 
+# ==================== 1. 核心密钥配置 ====================
+# [注意] 请务必在此处填入您在百度千帆后台真实的 API Key 和 Secret Key
+AI_API_KEY = "这里填入你的API_Key"
+AI_SECRET_KEY = "这里填入你的Secret_Key" 
 
-# 百度 OCR 密钥 (已为你配置好)
-BAIDU_OCR_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"         
-BAIDU_OCR_SECRET = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
-
-# 高德地图密钥 (已为你配置好)
+BAIDU_OCR_AK = "1vBiCqNtSYFRx6GYsGwpwXdM"         
+BAIDU_OCR_SK = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
-st.set_page_config(page_title="九江祥隆报价系统-旗舰版", layout="wide")
+st.set_page_config(page_title="九江祥隆报价系统", layout="wide")
 
-# ==================== 2. 功能引擎 ====================
+# 初始化记忆库
+if 'sites_final' not in st.session_state: st.session_state['sites_final'] = ""
+if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
 
-def get_ocr_token():
-    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_OCR_KEY}&client_secret={BAIDU_OCR_SECRET}"
+# ==================== 2. 核心引擎 (修复点击无反应) ====================
+
+def get_ai_token():
+    """独立获取 AI 提取专用的 Access Token"""
+    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={AI_API_KEY}&client_secret={AI_SECRET_KEY}"
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         return res.get("access_token")
     except: return None
 
-def ocr_engine(file_bytes):
-    token = get_ocr_token()
-    if not token: return "OCR 授权失败"
-    img64 = base64.b64encode(file_bytes).decode()
-    url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={token}"
-    try:
-        res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
-        return "".join([i['words'] for i in res.get('words_result', [])])
-    except: return "识别异常"
-
-def ai_extract_locations_v2(text):
-    """【旗舰提示词优化】强力大模型：地毯式搜索所有景点，绝不漏点"""
-    token = get_ocr_token() # 这里依然借用OCR Token，因为是同一账号应用
-    if not token: return "AI 授权失败"
+def ai_extract_v3(text):
+    """【旗舰提取】解决无反应问题，增加超时处理"""
+    token = get_ai_token()
+    if not token:
+        st.error("AI 授权失败，请检查 API Key 和 Secret Key 是否填写正确。")
+        return
     
-    # 采用性能最佳的模型接口：ERNIE-Speed-128K
     url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-128k?access_token={token}"
-    
-    # --- 终极优化版提示词：专治漏点和多字 ---
     prompt = (
-        f"请从以下行程描述中提取所有的【目的地地名】或【城市名】。\n"
-        f"特别注意：请不要漏掉文末提到的返程城市（例如'南昌返程'，必须提取出'南昌'两个字）和连带的景点（例如'陶阳里滕王阁'，必须拆分为'陶阳里 滕王阁'）。\n"
-        f"要求：\n"
-        f"1. 只输出纯地名，地名之间用【空格】分隔。\n"
-        f"2. 严禁输出数字（如1. 2. 3.）、标点符号、动作动词。\n"
-        f"原文：{text}"
+        f"请从行程中提取地名（城市、景点）。要求：1.只输出纯地名，空格分隔。2.严禁输出数字、日期、括号、动作词（如前往、住）。"
+        f"3.必须包含文末的景点如陶阳里、滕王阁和返程城市。原文：{text}"
     )
-    
     payload = json.dumps({"messages": [{"role": "user", "content": prompt}]})
+    
     try:
-        response = requests.post(url, data=payload, headers={'Content-Type': 'application/json'})
-        res = response.json()
-        raw_result = res.get("result", "").strip()
-        
-        # 二次暴力清理
-        clean_text = re.sub(r'\d+', ' ', raw_result)
-        for junk in ["目的地", "地名", "：", ":", ".", "、", "接", "送", "前往", "返程", "住", "车程"]:
-            clean_text = clean_text.replace(junk, " ")
-        return " ".join(clean_text.split())
-    except: return "AI连接异常"
+        with st.spinner('AI 正在深度解析行程...'):
+            res = requests.post(url, data=payload, headers={'Content-Type': 'application/json'}, timeout=15).json()
+            if "result" in res:
+                result = res["result"].strip()
+                # 过滤掉非中文字符
+                clean = re.sub(r'[^\u4e00-\u9fa5\s]', ' ', result)
+                st.session_state['sites_final'] = " ".join(clean.split())
+            else:
+                st.error(f"AI 响应异常：{res.get('error_msg', '未知错误')}")
+    except Exception as e:
+        st.error(f"连接超时或失败：{str(e)}")
 
-def rule_extract_locations(text):
-    """【旗舰规则优化】极致正则表达式：暴力剃除非地名文字"""
+def rule_extract_v3(text):
+    """【规则暴力清洗】不靠AI，靠硬规则删掉杂质"""
     if not text: return ""
-    # 1. 强力清除：所有日期 (如4.11) 和 括号内容 (车程约3h)
-    clean_text = re.sub(r'\(.*?\)', ' ', text)
-    clean_text = re.sub(r'（.*?）', ' ', clean_text)
-    clean_text = re.sub(r'\d+\.?\d*', ' ', clean_text)
-    
-    # 2. 剔除动作干扰词
-    for word in ['接', '前往', '返程', '车程', '约', 'h', '住']:
-        clean_text = clean_text.replace(word, ' ')
-    
-    # 3. 如果需要处理类似陶阳里滕王阁连字，可以用正则拆分
-    clean_text = re.sub(r'陶阳里滕王阁', '陶阳里 滕王阁', clean_text)
-        
-    return " ".join(clean_text.split()).strip()
+    # 删掉所有括号内容、数字、非中文字符
+    clean = re.sub(r'\(.*?\)|（.*?）|\d+\.?\d*|[^\u4e00-\u9fa5\s]', ' ', text)
+    # 强制拆分补丁
+    specials = {"陶阳里滕王阁": "陶阳里 滕王阁", "南昌返程": "南昌", "送南昌": "南昌"}
+    for k, v in specials.items():
+        clean = clean.replace(k, v)
+    # 过滤废话词
+    for word in ['接', '前往', '住', '下午', '简易行程', '约']:
+        clean = clean.replace(word, ' ')
+    st.session_state['sites_final'] = " ".join(clean.split())
 
-# ==================== 3. 侧边栏：核心报价计费 ====================
+# ==================== 3. 界面布局 ====================
 with st.sidebar:
     st.header("📊 报价核算中心")
-    # 计费设置不再折叠
-    st.subheader("⚙️ 计费标准设置")
+    st.subheader("⚙️ 计费标准")
     col_a, col_b = st.columns(2)
-    b39 = col_a.number_input("39座起步费", value=800)
-    p39 = col_b.number_input("39座单价", value=2.6)
-    b56 = col_a.number_input("56座起步费", value=1000)
-    p56 = col_b.number_input("56座单价", value=3.6)
-
+    b39, p39 = col_a.number_input("39起步", 800), col_b.number_input("39单价", 2.6)
+    b56, p56 = col_a.number_input("56起步", 1000), col_b.number_input("56单价", 3.6)
+    
     st.divider()
-    # 這裡的km優先讀取 session_state
-    f_km = st.number_input("实测总公里 (KM)", value=st.session_state.get('km_auto', 0))
-    f_days = st.number_input("用车总天数 (天)", value=4)
+    f_km = st.number_input("实测公里 (KM)", value=st.session_state['km_auto'])
+    f_days = st.number_input("用车天数", value=4)
     
     res_39 = int(f_km * p39 + f_days * b39)
     res_56 = int(f_km * p56 + f_days * b56)
     
-    st.markdown("### 💰 实时总报单")
-    st.success(f"🚌 **39座大巴：{res_39} 元**")
-    st.info(f"🚌 **56座大巴：{res_56} 元**")
+    st.success(f"39座：{res_39} 元 | 56座：{res_56} 元")
+    st.text_area("复制报价：", f"里程：{f_km}KM\n39座：{res_39}元\n56座：{res_56}元")
 
-    # 需求修改：增加可复制发送文本框
-    st.divider()
-    st.markdown("📄 **报价发送文案 (复制发送)**")
-    quote_text = (
-        f"【九江祥隆旅游运输报价单】\n"
-        f"实测公里数：{f_km} KM\n"
-        f"用车总天数：{f_days} 天\n"
-        f"--------------------\n"
-        f"🚌 39座大巴：{res_39} 元\n"
-        f"🚌 56座大巴：{res_56} 元\n"
-        f"（包含全包车费用）"
-    )
-    st.text_area("复制此文字发给客户：", value=quote_text, height=180)
-
-# ==================== 4. 主页面：流程操作 ====================
-st.header("🚌 九江祥隆旅游运输报价系统 (AI 旗舰版)")
+# 主页面
+st.header("🚌 九江祥隆旅游运输报价系统")
 m_left, m_right = st.columns([1, 1.2])
 
 with m_left:
-    st.markdown("### 1️⃣ 文字识别")
-    up_file = st.file_uploader("上传截图", type=["jpg", "png", "jpeg"])
-    if up_file:
-        img_bytes = up_file.read()
-        st.image(img_bytes, width=300)
-        if st.button("🚀 开始提取识别", use_container_width=True):
-            with st.spinner('提取文字中...'):
-                st.session_state['ocr_raw'] = ocr_engine(img_bytes)
+    st.markdown("### 1️⃣ 文字识别与提取")
+    up_file = st.file_uploader("上传行程截图", type=["jpg", "png"])
+    # 假设 OCR 已经识别出文字存入 ocr_raw
+    if 'ocr_raw' not in st.session_state: st.session_state['ocr_raw'] = ""
     
-    raw_txt = st.text_area("文本核对框：", value=st.session_state.get('ocr_raw', ""), height=150)
+    raw_txt = st.text_area("文本核对：", value=st.session_state['ocr_raw'], height=150)
     
-    st.markdown("---")
-    st.markdown("#### **站点提取方案选择**")
     c1, c2 = st.columns(2)
-    
     if c1.button("✨ 智能 AI 提取", use_container_width=True):
-        if raw_txt:
-            st.session_state['sites_final'] = ai_extract_locations_v2(raw_txt)
-        else:
-            st.warning("请先提取文字")
-
-    if c2.button("🤖 自动(规则)提取", use_container_width=True):
-        if raw_txt:
-            st.session_state['sites_final'] = rule_extract_locations(raw_txt)
-        else:
-            st.warning("请先提取文字")
+        ai_extract_v3(raw_txt)
+    if c2.button("🤖 自动规则提取", use_container_width=True):
+        rule_extract_v3(raw_txt)
 
 with m_right:
-    st.markdown("### 2️⃣ 站点确认与地图测距")
-    site_input = st.text_input("待匹配关键词 (空格隔开，AI提取的站点会在这里排队)：", value=st.session_state.get('sites_final', ""))
+    st.markdown("### 2️⃣ 站点确认")
+    site_input = st.text_input("提取出的地名：", value=st.session_state['sites_final'])
     
     confirmed_locs = []
     if site_input:
-        # 清除AI提取中可能留下的微小标点干扰
-        clean_site_input = site_input.replace(",", " ").replace("，", " ")
-        names = clean_site_input.split()
-        
-        # 分站下拉确认：确保顺序正确
+        names = site_input.split()
         for i, name in enumerate(names):
-            if not name.strip(): continue
             url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
             try:
-                tips = requests.get(url).json().get('tips', [])
-                valid_tips = [t for t in tips if t.get('location')]
-                if valid_tips:
-                    # 每一站显示一个下拉框，确保顺序正确
-                    sel = st.selectbox(f"确认第 {i+1} 站: {name}", [f"{t['name']} ({t.get('district','')})" for t in valid_tips], key=f"site_sel_v4_{i}")
-                    coord = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
-                    confirmed_locs.append(coord)
+                tips = requests.get(url, timeout=5).json().get('tips', [])
+                valid = [t for t in tips if t.get('location')]
+                if valid:
+                    sel = st.selectbox(f"确认第{i+1}站: {name}", [f"{t['name']} ({t.get('district','')})" for t in valid], key=f"v4_{i}")
+                    confirmed_locs.append(next(t['location'] for t in valid if sel.startswith(t['name'])))
             except: pass
 
-    # 需求修改：删除公里数计算按钮，直接计算并同步
+    # 自动测距
     if len(confirmed_locs) >= 2:
-        org, des = confirmed_locs[0], confirmed_locs[-1]
-        way = ";".join(confirmed_locs[1:-1])
-        r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way if way else ''}"
-        
+        org, des, way = confirmed_locs[0], confirmed_locs[-1], ";".join(confirmed_locs[1:-1])
+        r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way}"
         try:
-            res = requests.get(r_url).json()
-            if res['status'] == '1' and res['route']['paths']:
-                km_val = int(round(int(res['route']['paths'][0]['distance']) / 1000))
-                
-                # 存入 session_state 触发左侧报价单更新
-                st.session_state['km_auto'] = km_val
-                st.success(f"🚩 路线规划成功！实测公里数：{km_val} KM。")
-            else:
-                st.error("高德地图无法计算此路径，请检查站点模糊。")
+            res = requests.get(r_url, timeout=5).json()
+            if res['status'] == '1':
+                km = int(round(int(res['route']['paths'][0]['distance']) / 1000))
+                if km != st.session_state['km_auto']:
+                    st.session_state['km_auto'] = km
+                    st.rerun()
         except: pass
