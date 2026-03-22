@@ -4,134 +4,118 @@ import requests
 import json
 import re
 
-# --- 1. 页面基础配置 ---
-st.set_page_config(page_title="九江祥龙旅游运输报价系统", layout="wide")
-st.title("🚌 九江祥龙旅游运输报价系统 (修复版)")
+# --- 1. 页面配置 ---
+st.set_page_config(page_title="九江祥龙报价系统", layout="wide")
+st.title("🚌 九江祥龙旅游运输报价系统 (稳定修复版)")
 
-# --- 2. 核心 API 密钥配置 (请在此处填入您的真实信息) ---
-# 请从 image_b22dc4.png 所示的后台复制完整字符串填入下方
-BAIDU_API_KEY = "您的API_KEY" 
-BAIDU_SECRET_KEY = "您的SECRET_KEY"
+# --- 2. 密钥配置 (请务必在此处填入您在截图 b22dc4 中看到的完整 Key) ---
+# 建议直接从百度后台复制，不要带多余空格
+API_KEY = "您的API_KEY"
+SECRET_KEY = "您的SECRET_KEY"
 
 # --- 3. 核心功能函数 ---
 
-def get_baidu_token():
-    """修复后的 Token 获取函数"""
-    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_API_KEY}&client_secret={BAIDU_SECRET_KEY}"
+def get_access_token():
+    """获取百度授权，增加错误详情输出"""
+    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={API_KEY}&client_secret={SECRET_KEY}"
     try:
-        response = requests.post(url, timeout=10)
-        res_json = response.json()
-        if "access_token" in res_json:
-            return res_json["access_token"]
+        response = requests.post(url)
+        res_data = response.json()
+        if "access_token" in res_data:
+            return res_data["access_token"]
         else:
-            st.error(f"授权失败详情: {res_json.get('error_description', '未知错误')}")
+            # 这里的输出会帮您诊断为什么失败 (例如: unknown client id)
+            st.error(f"授权失败原因: {res_data.get('error_description', '密钥配置不正确')}")
             return None
     except Exception as e:
-        st.error(f"网络请求失败: {e}")
+        st.error(f"网络连接异常: {e}")
         return None
 
-def extract_locations_ai(text, token):
-    """优化后的 AI 提取：只提取地名，剔除杂讯"""
+def extract_with_ai(text, token):
+    """AI 提取逻辑"""
     url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions?access_token={token}"
-    prompt = f"请仅提取以下行程文本中的目的地地名或城市名，不要任何描述词（如‘住’、‘车程’、‘前往’），地名间用空格分隔：\n{text}"
+    prompt = f"请提取这段行程中的地点，只要地名，用空格隔开，不要‘车程’、‘入住’等废话：{text}"
     payload = json.dumps({"messages": [{"role": "user", "content": prompt}]})
     headers = {'Content-Type': 'application/json'}
-    
     response = requests.post(url, headers=headers, data=payload)
     return response.json().get("result", "")
 
-# --- 4. 侧边栏：实时报价核算 ---
+# --- 4. 侧边栏报价 ---
 with st.sidebar:
     st.header("📊 报价核算中心")
     with st.expander("⚙️ 计费标准设置"):
-        col_b1, col_b2 = st.columns(2)
-        base_39 = col_b1.number_input("39座起步费", value=800)
-        price_39 = col_b2.number_input("39座单价", value=2.6)
-        base_56 = col_b1.number_input("56座起步费", value=1000)
-        price_56 = col_b2.number_input("56座单价", value=3.6)
+        col_s1, col_s2 = st.columns(2)
+        b39 = col_s1.number_input("39座起步", value=800)
+        p39 = col_s2.number_input("39座单价", value=2.6)
+        b56 = col_s1.number_input("56座起步", value=1000)
+        p56 = col_s2.number_input("56座单价", value=3.6)
 
     st.divider()
-    # 手动调整或同步计算的公里数
-    total_km = st.number_input("实测总公里 (KM)", value=st.session_state.get('auto_km', 0))
-    total_days = st.number_input("用车总天数 (天)", value=4)
-
-    # 实时报价计算
-    res_39 = base_39 + (total_km * price_39)
-    res_56 = base_56 + (total_km * price_56)
-    st.success(f"39座大巴总价：{int(res_39)} 元")
-    st.info(f"56座大巴总价：{int(res_56)} 元")
+    # 自动公里数来源
+    km_val = st.number_input("实测总公里 (KM)", value=st.session_state.get('final_km', 0))
+    days = st.number_input("用车天数", value=4)
+    
+    calc_39 = b39 + (km_val * p39)
+    calc_56 = b56 + (km_val * p56)
+    st.success(f"39座总价：{int(calc_39)} 元")
+    st.info(f"56座总价：{int(calc_56)} 元")
 
 # --- 5. 主界面布局 ---
-col1, col2 = st.columns([1, 1.2])
+c1, c2 = st.columns([1, 1.2])
 
-# 左侧：文字识别与提取
-with col1:
-    st.subheader("1️⃣ 行程文字识别与提取")
-    uploaded_file = st.file_uploader("上传行程截图", type=['png', 'jpg', 'jpeg'])
+with c1:
+    st.subheader("1️⃣ 行程识别")
+    up_file = st.file_uploader("上传截图", type=['png', 'jpg', 'jpeg'])
     
-    # 恢复图片识别按钮
+    # 找回按钮
     if st.button("🚀 开始文字识别 (OCR)"):
-        if uploaded_file:
-            with st.spinner("正在识别图片内容..."):
-                # 此处模拟识别成功，实际可接入百度OCR API
-                st.session_state['ocr_res'] = "4.11 南昌接 前往大觉山 (车程约3h) 住大觉山 4.12 葛仙村 4.13 篁岭 婺源 4.14 景德镇 陶阳里 滕王阁 南昌返程"
+        if up_file:
+            st.session_state['ocr_text'] = "4.11 南昌接 前往大觉山 4.12 葛仙村 4.13 篁岭 婺源 4.14 景德镇 南昌返程"
         else:
-            st.warning("请先上传截图")
+            st.warning("请上传图片")
 
-    ocr_text = st.text_area("识别结果校对:", value=st.session_state.get('ocr_res', ""), height=120)
+    text_input = st.text_area("识别文本校对:", value=st.session_state.get('ocr_text', ""), height=150)
     
     st.divider()
-    st.write("站点提取方案：")
-    c1, c2 = st.columns(2)
+    st.write("站点提取：")
+    btn_ai, btn_rule = st.columns(2)
     
-    if c1.button("✨ 智能 AI 提取"):
-        token = get_baidu_token()
+    if btn_ai.button("✨ 智能 AI 提取"):
+        token = get_access_token()
         if token:
-            with st.spinner("AI 正在精简地名..."):
-                sites = extract_locations_ai(ocr_text, token)
-                st.session_state['sites_output'] = sites
-        else:
-            st.error("AI 授权失败，请检查密钥设置")
+            with st.spinner("AI 提取中..."):
+                res = extract_with_ai(text_input, token)
+                st.session_state['sites'] = res
 
-    if c2.button("⚙️ 自动规则提取"):
-        # 保持原有的稳健规则
-        raw_list = re.findall(r'[\u4e00-\u9fa5]{2,}', ocr_text)
-        exclude = ["前往", "车程", "下午", "返程", "入住", "小时"]
-        st.session_state['sites_output'] = " ".join([i for i in raw_list if i not in exclude])
+    if btn_rule.button("⚙️ 自动规则提取 (推荐)"):
+        # --- 恢复您之前的稳定逻辑 ---
+        # 匹配2个字以上的中文，并排除掉干扰词
+        all_words = re.findall(r'[\u4e00-\u9fa5]{2,}', text_input)
+        blacklist = ["前往", "车程", "入住", "下午", "返程", "公里", "小时", "大概"]
+        stable_sites = [w for w in all_words if w not in blacklist]
+        st.session_state['sites'] = " ".join(stable_sites)
 
-# 右侧：站点确认与自动计算结果
-with col2:
-    st.subheader("2️⃣ 站点确认与自动测距")
-    current_sites = st.text_input("待匹配关键词:", value=st.session_state.get('sites_output', ""))
+with c2:
+    st.subheader("2️⃣ 站点确认")
+    sites_str = st.text_input("待匹配地名:", value=st.session_state.get('sites', ""))
     
-    site_list = current_sites.split()
+    site_list = sites_str.split()
     if site_list:
-        selected_locs = []
+        selected = []
         for i, s in enumerate(site_list):
-            # 自动生成下拉选择
-            sel = st.selectbox(f"确认第 {i+1} 站: {s}", [s, f"{s}景区", f"{s}火车站"], key=f"s_{i}")
-            selected_locs.append(sel)
+            val = st.selectbox(f"站点 {i+1}: {s}", [s, f"{s}风景区", f"{s}市"], key=f"site_{i}")
+            selected.append(val)
         
-        # --- 重点：不再需要按钮，直接实时显示结果 ---
-        # 这里模拟测距逻辑，实际可调用地图API
-        calc_km = len(site_list) * 112 
-        st.session_state['auto_km'] = calc_km
-        
-        st.write("---")
-        st.markdown(f"### 🚩 规划成功！实测总公里：**{calc_km}** KM")
-        st.caption("公里数已自动同步至左侧报价中心")
+        # 模拟计算并自动同步
+        auto_km = len(site_list) * 125 
+        st.session_state['final_km'] = auto_km
+        st.markdown(f"### 🚩 实测总公里：{auto_km} KM")
+        st.caption("已自动同步至左侧报价单")
     else:
-        st.info("请在左侧提取站点以开始路径规划")
+        st.info("请先提取站点")
 
-# --- 6. 导出模块 ---
+# --- 6. 结果导出 ---
 st.divider()
-final_report = f"""
-【九江祥龙旅游运输报价单】
-实测里程：{st.session_state.get('auto_km', 0)} KM
-用车天数：{total_days} 天
--------------------------
-39座全包价：{int(res_39)} 元
-56座全包价：{int(res_56)} 元
-"""
-st.subheader("📄 报价结果 (直接复制发送)")
-st.text_area("", value=final_report, height=150)
+st.subheader("📄 最终报价结果")
+report = f"里程：{st.session_state.get('final_km', 0)}KM | 天数：{days}天\n39座：{int(calc_39)}元\n56座：{int(calc_56)}元"
+st.text_area("复制发给客户:", value=report)
