@@ -5,140 +5,155 @@ import re
 import base64
 import json
 
-# ==================== 1. 核心密钥配置 (已根据您的代码还原) ====================
-BAIDU_OCR_KEY = "1vBiCqNtSYFRx6GYsGwpwXdM"        
-BAIDU_OCR_SECRET = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
-AI_API_KEY = "ALTAKRoF5rezfzpBHyvueydG2B"
-AI_SECRET_KEY = "10bc499df39a472d882aee64221d1e31" 
+# ==================== 1. 核心密钥配置 ====================
+
+# [已修复] 适配 bce-v3 格式的 AI 凭证
+AI_API_KEY_V2 = "bce-v3/ALTAK-EMZixkEbLJ0iEkFcaJCFc/74514893890101d198dd642b3b95ea68bed95897"
+
+# 百度 OCR 密钥 (保持不变)
+BAIDU_OCR_AK = "1vBiCqNtSYFRx6GYsGwpwXdM"         
+BAIDU_OCR_SK = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
+
+# 高德地图密钥 (保持不变)
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
-st.set_page_config(page_title="九江祥隆报价系统-完整双模版", layout="wide")
+st.set_page_config(page_title="九江祥龙报价系统-旗舰版", layout="wide")
 
-# ==================== 2. 界面样式定制 (还原您的 CSS) ====================
-st.markdown("""
-    <style>
-    .block-container {padding-top: 1rem !important;}
-    [data-testid="stSidebar"] {background-color: #f0f2f6; min-width: 280px;}
-    .stNumberInput div div input {font-size: 1.1rem !important; color: #1e88e5 !important;}
-    </style>
-    """, unsafe_allow_html=True)
+# 初始化状态
+if 'ocr_raw' not in st.session_state: st.session_state['ocr_raw'] = ""
+if 'sites_final' not in st.session_state: st.session_state['sites_final'] = ""
+if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
 
-# 干扰词过滤库
-BLACK_LIST = ["第一天", "第二天", "第三天", "第四天", "第五天", "第六天", "第七天", "返程", "行程", "住宿", "用餐", "含餐", "早餐", "午餐", "晚餐", "自理", "车程", "小时", "分钟", "接团", "送团", "出发", "返回", "入住", "酒店", "车费", "司机", "左右", "抵达"]
+# ==================== 2. 功能引擎 ====================
 
-# ==================== 3. 后端核心功能 ====================
-def get_access_token(api_key, secret_key):
-    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
+def get_ocr_token():
+    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_OCR_AK}&client_secret={BAIDU_OCR_SK}"
     try: return requests.get(url).json().get("access_token")
     except: return None
 
 def ocr_engine(file_bytes):
-    token = get_access_token(BAIDU_OCR_KEY, BAIDU_OCR_SECRET)
+    token = get_ocr_token()
+    if not token: return "OCR 授权失败"
     img64 = base64.b64encode(file_bytes).decode()
     url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={token}"
-    res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
-    return "".join([i['words'] for i in res.get('words_result', [])])
-
-def ai_extract_locations(text):
-    """AI 智能模式"""
-    token = get_access_token(AI_API_KEY, AI_SECRET_KEY)
-    url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-x1-turbo-32k?access_token={token}"
-    prompt = f"你是一个旅游调度。请从文字中提取纯地名，地名间用空格隔开。原文：{text}"
-    payload = json.dumps({"messages": [{"role": "user", "content": prompt}]})
     try:
-        res = requests.post(url, data=payload, headers={'Content-Type': 'application/json'}).json()
-        return res.get("result", "").strip()
-    except: return ""
+        res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
+        return "".join([i['words'] for i in res.get('words_result', [])])
+    except: return "识别异常"
 
-# ==================== 4. 状态管理 ====================
-if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
-if 'sites_list' not in st.session_state: st.session_state['sites_list'] = []
-if 'confirmed_data' not in st.session_state: st.session_state['confirmed_data'] = {}
+def ai_extract_locations_v2(text):
+    """【专用优化】适配 bce-v3 长凭证认证逻辑"""
+    url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-128k"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AI_API_KEY_V2}"
+    }
+    prompt = (
+        f"你是一个专业的旅游行程调度专家。请从以下文本中提取所有的目的地【地名】或【城市】。\n"
+        f"要求：只输出地名，地名之间用空格分隔。不要输出数字、符号、动作词（如接送、住、前往）。\n"
+        f"必须包含行程结尾的景点。原文：{text}"
+    )
+    payload = {"messages": [{"role": "user", "content": prompt}]}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        res = response.json()
+        if "result" in res:
+            raw_result = res.get("result", "").strip()
+            # 强力二次去噪，只保留中文和空格
+            clean_text = re.sub(r'[^\u4e00-\u9fa5\s]', ' ', raw_result)
+            return " ".join(clean_text.split())
+        else: return f"AI 错误: {res.get('error_msg', '未知响应')}"
+    except Exception as e: return f"AI 连接超时: {str(e)}"
 
-# ==================== 5. 侧边栏报价 ====================
+def rule_extract_locations(text):
+    """【高准确率版本】您的自动规则提取逻辑"""
+    if not text: return ""
+    # 1. 剔除括号内容 (车程3h) 和 数字日期 (4.11) 以及非中文符号
+    clean = re.sub(r'\(.*?\)|（.*?）|\d+\.?\d*|[^\u4e00-\u9fa5\s]', ' ', text)
+    # 2. 精准过滤非地名词汇
+    for word in ['接', '送', '前往', '返程', '车程', '约', '住', '下午', '简易行程', '小时', '公里']:
+        clean = clean.replace(word, ' ')
+    # 3. 补丁：拆解连写的核心地名
+    clean = clean.replace("陶阳里滕王阁", "陶阳里 滕王阁")
+    return " ".join(clean.split()).strip()
+
+# ==================== 3. 界面布局 ====================
+
 with st.sidebar:
-    st.header("📊 报价核算")
-    with st.form("price_form"):
-        c1, c2 = st.columns(2)
-        b39, p39 = c1.number_input("39座起步", value=800), c2.number_input("39座单价", value=2.60)
-        f_km = st.number_input("总公里 (KM)", value=st.session_state['km_auto'])
-        f_days = st.number_input("总天数 (天)", value=4)
-        st.form_submit_button("💰 更新价格")
+    st.header("📊 报价核算中心")
+    st.subheader("⚙️ 计费标准设置")
+    col_a, col_b = st.columns(2)
+    b39, p39 = col_a.number_input("39起步费", 800), col_b.number_input("39单价", 2.6)
+    b56, p56 = col_a.number_input("56起步费", 1000), col_b.number_input("56单价", 3.6)
     
-    total_39 = int(f_km * p39 + f_days * b39)
-    st.markdown(f"""<div style="background:#e3f2fd; padding:15px; border-radius:5px; text-align:center;">
-        <h3 style="margin:0; color:#1e88e5;">39座预估: {total_39} 元</h3></div>""", unsafe_allow_html=True)
+    st.divider()
+    # 这里会自动显示右侧测距出来的公里数
+    f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
+    f_days = st.number_input("用车总天数", value=4)
+    
+    res_39 = int(f_km * p39 + f_days * b39)
+    res_56 = int(f_km * p56 + f_days * b56)
+    st.success(f"39座：{res_39} 元 | 56座：{res_56} 元")
+    
+    st.divider()
+    quote_text = f"【九江祥龙报价单】\n里程：{f_km}KM | 天数：{f_days}天\n---\n39座大巴：{res_39}元\n56座大巴：{res_56}元"
+    st.text_area("复制文案：", value=quote_text, height=150)
 
-# ==================== 6. 主页面：双模提取区 ====================
-st.header("🚌 九江祥隆旅游运输报价系统")
+st.header("🚌 九江祥龙旅游运输报价系统 (AI 旗舰版)")
 m_left, m_right = st.columns([1, 1.2])
 
 with m_left:
-    st.markdown("### 1️⃣ 行程智能提取")
+    st.subheader("1️⃣ 文字识别与提取")
     up_file = st.file_uploader("上传行程截图", type=["jpg", "png", "jpeg"])
-    if up_file and st.button("🚀 执行 OCR 识别"):
-        st.session_state['ocr_raw'] = ocr_engine(up_file.read())
+    if up_file:
+        if st.button("🚀 开始文字提取识别", use_container_width=True):
+            with st.spinner('提取中...'):
+                st.session_state['ocr_raw'] = ocr_engine(up_file.read())
     
-    raw_txt = st.text_area("识别文本校对：", value=st.session_state.get('ocr_raw', ""), height=180)
+    raw_txt = st.text_area("识别结果校对：", value=st.session_state.get('ocr_raw', ""), height=200)
     
-    # 双模提取按钮
-    btn_col1, btn_col2 = st.columns(2)
-    if btn_col1.button("✨ 智能 AI 提取", use_container_width=True):
-        res = ai_extract_locations(raw_txt)
-        st.session_state['sites_list'] = res.split()
-        st.session_state['confirmed_data'] = {} # 重置已选数据
-        
-    if btn_col2.button("🤖 自动规则提取", use_container_width=True):
-        locs = re.findall(r'[\u4e00-\u9fa5]{2,}', raw_txt)
-        cleaned = [l for l in locs if l not in BLACK_LIST]
-        st.session_state['sites_list'] = cleaned
-        st.session_state['confirmed_data'] = {}
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    if col1.button("✨ 智能 AI 提取", use_container_width=True):
+        st.session_state['sites_final'] = ai_extract_locations_v2(raw_txt)
+    if col2.button("🤖 自动规则提取", use_container_width=True):
+        st.session_state['sites_final'] = rule_extract_locations(raw_txt)
 
 with m_right:
-    st.markdown("### 2️⃣ 站点确认 (高德单框模式)")
+    st.subheader("2️⃣ 站点确认与公里数结果")
+    site_input = st.text_input("提取出的地名：", value=st.session_state.get('sites_final', ""))
     
-    for i, site in enumerate(st.session_state['sites_list']):
-        # 获取当前框内应显示的内容（优先显示选定的，其次显示提取的）
-        current_name = st.session_state['confirmed_data'].get(i, {}).get('full_name', site)
-        
-        # 实时请求高德联想
-        t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={current_name}&key={AMAP_KEY}"
-        try:
-            tips = [t for t in requests.get(t_url).json().get('tips', []) if t.get('location')]
-            if tips:
-                options = [f"{t['name']} ({t.get('district','')})" for t in tips]
-                # 单框模式：选择框直接承载搜索结果
-                selected = st.selectbox(f"📍 站点 {i+1}", options=options, key=f"site_box_{i}")
-                
-                # 实时回填坐标与名称到 Session
-                target = next(t for t in tips if f"{t['name']} ({t.get('district','')})" == selected)
-                st.session_state['confirmed_data'][i] = {
-                    "full_name": selected,
-                    "coord": target['location']
-                }
-            else:
-                st.warning(f"站点 {i+1}: '{current_name}' 未找到精准定位")
-        except:
-            pass
-
-    # ==================== 7. 路径规划控制器 ====================
-    st.divider()
-    if len(st.session_state['confirmed_data']) >= 2:
-        if st.button("🗺️ 确认所有地址，生成导航里程", use_container_width=True, type="primary"):
-            keys = sorted(st.session_state['confirmed_data'].keys())
-            coords = [st.session_state['confirmed_data'][k]['coord'] for k in keys]
-            
-            org, des, way = coords[0], coords[-1], ";".join(coords[1:-1])
-            r_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&key={AMAP_KEY}&waypoints={way}"
-            
+    confirmed_locs = []
+    if site_input:
+        names = site_input.replace(",", " ").replace("，", " ").split()
+        for i, name in enumerate(names):
+            if not name.strip(): continue
+            # 高德搜索建议
+            t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={name}&key={AMAP_KEY}"
             try:
-                res = requests.get(r_url).json()
-                if res['status'] == '1':
-                    km = int(int(res['route']['paths'][0]['distance']) / 1000)
-                    st.session_state['km_auto'] = km
-                    st.success(f"✅ 计算成功！总行程：{km} 公里")
-                    st.rerun()
-                else:
-                    st.error("高德路径规划失败")
-            except:
-                st.error("网络连接异常")
+                tips = requests.get(t_url, timeout=5).json().get('tips', [])
+                valid = [t for t in tips if isinstance(t.get('location'), str) and t.get('location')]
+                if valid:
+                    # 默认选第一个最匹配的
+                    sel = st.selectbox(f"确认第 {i+1} 站: {name}", 
+                                     [f"{t['name']} ({t.get('district','')})" for t in valid], key=f"loc_{i}")
+                    confirmed_locs.append(next(t['location'] for t in valid if sel.startswith(t['name'])))
+            except: pass
+
+    # --- 逻辑修改：不再需要按钮，直接实时计算并显示结果 ---
+    if len(confirmed_locs) >= 2:
+        org, des = confirmed_locs[0], confirmed_locs[-1]
+        way = ";".join(confirmed_locs[1:-1])
+        d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
+        try:
+            res = requests.get(d_url, timeout=5).json()
+            if res['status'] == '1' and res['route']['paths']:
+                dist = int(res['route']['paths'][0]['distance']) / 1000
+                st.session_state['km_auto'] = int(dist)
+                st.write("---")
+                st.success(f"### 🚩 计划行驶总里程：{int(dist)} KM")
+                st.info("💡 公里数已自动同步到左侧报价中心，无需点击计算。")
+        except: 
+            st.error("地图路线规划异常")
+    elif site_input:
+        st.warning("请至少确认两个站点以计算里程。")
