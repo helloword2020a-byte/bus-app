@@ -106,7 +106,7 @@ with st.sidebar:
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑型布局优化</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑布局 & 测距逻辑优化</p></div>', unsafe_allow_html=True)
 
 # 第一行：解析提取
 st.subheader("1️⃣ 行程解析提取")
@@ -135,12 +135,11 @@ with c3:
 
 st.divider()
 
-# 第二行：站点横向排列确认 (你要求改进的地方)
+# 第二行：站点横向排列确认
 st.subheader("2️⃣ 站点位置确认")
 if not st.session_state['confirmed_sites']:
     st.info("💡 请在上方解析地名后点击“确认并同步”")
 else:
-    # 动态创建列，每行放 4 个站点（如果站点很多会自动适应）
     num_sites = len(st.session_state['confirmed_sites'])
     cols = st.columns(num_sites if num_sites > 0 else 1)
     
@@ -148,10 +147,8 @@ else:
     for i, name in enumerate(st.session_state['confirmed_sites']):
         with cols[i]:
             st.markdown(f'<p class="compact-label">🚩 第 {i+1} 站</p>', unsafe_allow_html=True)
-            # 搜索词
             search_kw = st.text_input(f"搜索{i+1}", value=name, key=f"inp_{name}_{i}", label_visibility="collapsed")
             
-            # 获取建议
             valid_tips = get_amap_tips(search_kw)
             if valid_tips:
                 opts = [f"{t['name']} ({t.get('district','')})" for t in valid_tips]
@@ -159,23 +156,37 @@ else:
                 loc = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
                 current_coords.append(loc)
             else:
-                st.caption("⚠️ 未找到")
+                st.caption("⚠️ 未找到位置")
 
-    # 计算里程按钮
     st.markdown("<br>", unsafe_allow_html=True)
     if len(current_coords) >= 2:
         if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
-            with st.spinner("正在测距..."):
+            with st.spinner("正在进行路径规划..."):
                 org, des = current_coords[0], current_coords[-1]
                 way = ";".join(current_coords[1:-1])
                 d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
+                
                 try:
-                    res = requests.get(d_url, timeout=10).json()
-                    if res.get('status') == '1':
-                        dist = int(res['route']['paths'][0]['distance']) / 1000
-                        st.session_state['km_auto'] = int(dist)
-                        st.success(f"规划成功！总里程：{int(dist)} KM")
-                        time.sleep(0.3)
+                    response = requests.get(d_url, timeout=10)
+                    res = response.json()
+                    
+                    if res.get('status') == '1' and 'route' in res:
+                        # 提取距离（单位：米 -> 公里）
+                        dist_meter = int(res['route']['paths'][0]['distance'])
+                        dist_km = int(dist_meter / 1000)
+                        
+                        # 更新状态
+                        st.session_state['km_auto'] = dist_km
+                        st.success(f"✅ 规划成功！总里程：{dist_km} KM")
+                        st.toast(f"里程 {dist_km}km 已同步至左侧面板")
+                        time.sleep(0.5)
                         st.rerun()
-                except:
-                    st.error("测距失败")
+                    else:
+                        # API 返回了错误状态码
+                        err_info = res.get('info', '未知错误')
+                        st.error(f"❌ 测距失败：{err_info} (请检查站点是否过于偏僻或无法驾车到达)")
+                except Exception as e:
+                    # 网络层面的报错
+                    st.error(f"🌐 网络请求异常: {str(e)}")
+    elif len(st.session_state['confirmed_sites']) > 0:
+        st.warning("⚠️ 至少需要确认两个有效站点才能计算里程")
