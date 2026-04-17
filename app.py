@@ -15,7 +15,6 @@ st.set_page_config(page_title="九江祥隆报价系统-旗舰版", layout="wide
 # ==================== 2. 界面样式定制 ====================
 st.markdown("""
     <style>
-    /* 右侧站点区独立滚动容器 */
     .scroll-container {
         max-height: 750px;
         overflow-y: auto;
@@ -24,9 +23,15 @@ st.markdown("""
         border-radius: 8px;
         background-color: #fafafa;
     }
-    .preview-area {
-        border: 2px solid #ff4b4b !important;
+    .km-display {
+        font-size: 24px;
+        font-weight: bold;
+        color: #ff4b4b;
+        text-align: center;
+        padding: 10px;
+        background-color: #ffebee;
         border-radius: 5px;
+        margin-top: 10px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -48,16 +53,11 @@ def ocr_engine(file_bytes):
 def ai_extract(text):
     url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-128k"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {AI_API_KEY_V2}"}
-    prompt = f"提取目的地地名，空格分隔。原文：{text}"
+    prompt = f"提取目的地地名，用逗号分隔。原文：{text}"
     res = requests.post(url, headers=headers, json={"messages": [{"role": "user", "content": prompt}]}).json()
-    return " ".join(re.sub(r'[^\u4e00-\u9fa5\s]', ' ', res.get("result", "")).split())
+    return res.get("result", "").replace(" ", ",")
 
-def rule_extract(text):
-    clean = re.sub(r'\(.*?\)|（.*?）|\d+\.?\d*|[^\u4e00-\u9fa5\s]', ' ', text or "")
-    for word in ['接', '送', '前往', '返程', '车程', '住', '小时', '公里']: clean = clean.replace(word, ' ')
-    return " ".join(clean.split())
-
-# ==================== 4. 经典三列布局 ====================
+# ==================== 4. 布局方案 ====================
 col_calc, col_extract, col_confirm = st.columns([0.8, 1, 1.2])
 
 # --- 左侧：报价单 ---
@@ -81,25 +81,23 @@ with col_extract:
     if up_file and st.button("识别文字", use_container_width=True):
         st.session_state['ocr_raw'] = ocr_engine(up_file.read())
     
-    ocr_edit = st.text_area("OCR文本校对", value=st.session_state['ocr_raw'], height=150)
+    ocr_edit = st.text_area("OCR原文校对", value=st.session_state['ocr_raw'], height=150)
     
-    c_btn1, c_btn2 = st.columns(2)
-    if c_btn1.button("✨ AI 提取", use_container_width=True):
+    if st.button("✨ 智能提取地名", use_container_width=True):
         st.session_state['temp_preview_text'] = ai_extract(ocr_edit)
-    if c_btn2.button("🤖 规则提取", use_container_width=True):
-        st.session_state['temp_preview_text'] = rule_extract(ocr_edit)
     
     st.write("---")
-    # 【预览框】：支持人工修改
-    modified_text = st.text_area("🖊️ 提取结果预览(在此人工修正)", 
+    # 【预览框】：支持手动修改，支持逗号分隔
+    modified_text = st.text_area("🖊️ 提取结果预览(用逗号或空格分隔)", 
                                  value=st.session_state['temp_preview_text'], 
-                                 height=100, 
-                                 help="请确保地名之间用空格隔开")
+                                 height=100)
     
-    # 【唯一触发按钮】：点击才更新右侧
+    # 【唯一权限触发】：点击后强制更新右侧站点列表
     if st.button("🚀 确认并填充至站点", type="primary", use_container_width=True):
-        st.session_state['final_station_list'] = modified_text.split()
-        st.rerun()
+        # 同时支持中英文逗号和空格分隔
+        sites = re.split(r'[，,\s]+', modified_text)
+        st.session_state['final_station_list'] = [s.strip() for s in sites if s.strip()]
+        st.rerun() # 必须强制刷新以更新右侧表单
 
 # --- 右侧：站点确认区 ---
 with col_confirm:
@@ -107,25 +105,24 @@ with col_confirm:
     st.markdown('<div class="scroll-container">', unsafe_allow_html=True)
     
     current_coords = []
-    # 【逻辑核心】：循环生成的列表仅基于 final_station_list
+    # 动态生成站点，key中加入列表长度确保唯一性以解决不更新问题
     for i, name in enumerate(st.session_state['final_station_list']):
         with st.container(border=True):
-            # 搜索框：根据填充的地名自动发起高德联想
-            search_kw = st.text_input(f"站{i+1} 关键词", value=name, key=f"kw_{i}")
+            search_kw = st.text_input(f"站{i+1} 关键词", value=name, key=f"kw_{i}_{len(st.session_state['final_station_list'])}")
             t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={search_kw}&key={AMAP_KEY}"
             try:
                 tips = requests.get(t_url, timeout=5).json().get('tips', [])
                 valid = [t for t in tips if t.get('location')]
                 if valid:
-                    sel = st.selectbox(f"请确认精准地址 (站{i+1})", 
+                    sel = st.selectbox(f"请确认站{i+1}地址", 
                                        options=[f"{t['name']} ({t.get('district','')})" for t in valid], 
-                                       key=f"sel_{i}")
+                                       key=f"sel_{i}_{len(st.session_state['final_station_list'])}")
                     current_coords.append(next(t['location'] for t in valid if sel.startswith(t['name'])))
             except: pass
             
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 最终测距按钮
+    # 测距逻辑与结果显示
     if len(current_coords) >= 2:
         st.divider()
         if st.button("🗺️ 开始规划测距", use_container_width=True, type="primary"):
@@ -135,3 +132,7 @@ with col_confirm:
             if res['status'] == '1':
                 st.session_state['km_auto'] = int(int(res['route']['paths'][0]['distance']) / 1000)
                 st.rerun()
+        
+        # 【新增】：测完后的公里数显示
+        if st.session_state['km_auto'] > 0:
+            st.markdown(f'<div class="km-display">📏 规划完成！总公里数：{st.session_state["km_auto"]} KM</div>', unsafe_allow_html=True)
