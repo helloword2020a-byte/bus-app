@@ -19,21 +19,16 @@ st.markdown("""
 <style>
     .main-header { background: linear-gradient(135deg, #1a3a5c 0%, #2563a8 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
     .stButton > button { border-radius: 8px !important; }
-    /* 紧凑型站点显示 */
     .compact-label { font-size: 14px; color: #64748b; margin-bottom: 5px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # 状态初始化
-_defaults = {
-    'ocr_raw': "", 
-    'sites_preview': "",   
-    'confirmed_sites': [], 
-    'km_auto': 0,
-    'last_calc_success': False  # 记录上次计算是否成功
-}
-for k, v in _defaults.items():
-    if k not in st.session_state: st.session_state[k] = v
+if 'ocr_raw' not in st.session_state: st.session_state['ocr_raw'] = ""
+if 'sites_preview' not in st.session_state: st.session_state['sites_preview'] = ""
+if 'confirmed_sites' not in st.session_state: st.session_state['confirmed_sites'] = []
+if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
+if 'last_calc_success' not in st.session_state: st.session_state['last_calc_success'] = False
 
 # ==================== 2. 后端引擎函数 ====================
 
@@ -93,11 +88,18 @@ with st.sidebar:
         p56 = col_b.number_input("56单价", 3.6)
     
     st.divider()
-    # 圈起来的3：实测总公里 (从 session_state 保持同步)
-    f_km = st.number_input("实测总公里 (KM)", value=int(st.session_state['km_auto']), key="manual_km_input")
+    
+    # 【修复重点】使用 session_state 直接作为 number_input 的值，并监听手动修改
+    f_km = st.number_input(
+        "实测总公里 (KM)", 
+        min_value=0, 
+        value=int(st.session_state['km_auto']), 
+        key="km_input_field"
+    )
+    # 确保手动修改输入框时同步回状态
     st.session_state['km_auto'] = f_km
     
-    f_days = st.number_input("用车总天数", value=4)
+    f_days = st.number_input("用车总天数", value=4, min_value=1)
     
     res_39 = int(f_km * p39 + f_days * b39)
     res_56 = int(f_km * p56 + f_days * b56)
@@ -126,10 +128,8 @@ with c2:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("✨ 智能 AI 提取", use_container_width=True):
         st.session_state['sites_preview'] = ai_extract_locations(st.session_state['ocr_raw'])
-        st.session_state['last_calc_success'] = False 
     if st.button("🤖 自动规则提取", use_container_width=True):
         st.session_state['sites_preview'] = rule_extract_locations(st.session_state['ocr_raw'])
-        st.session_state['last_calc_success'] = False 
     
 with c3:
     edited_sites = st.text_area("🖊️ 提取地名列表 (可修改)", value=st.session_state['sites_preview'], height=80)
@@ -137,7 +137,6 @@ with c3:
     if st.button("✅ 确认并同步到下方站点", type="primary", use_container_width=True):
         names = re.split(r'[，,\s]+', edited_sites)
         st.session_state['confirmed_sites'] = [n.strip() for n in names if n.strip()]
-        st.session_state['last_calc_success'] = False 
         st.rerun()
 
 st.divider()
@@ -154,12 +153,13 @@ else:
     for i, name in enumerate(st.session_state['confirmed_sites']):
         with cols[i]:
             st.markdown(f'<p class="compact-label">🚩 第 {i+1} 站</p>', unsafe_allow_html=True)
-            search_kw = st.text_input(f"搜索{i+1}", value=name, key=f"inp_{name}_{i}", label_visibility="collapsed")
+            search_kw = st.text_input(f"搜索{i+1}", value=name, key=f"inp_{i}", label_visibility="collapsed")
             
             valid_tips = get_amap_tips(search_kw)
             if valid_tips:
                 opts = [f"{t['name']} ({t.get('district','')})" for t in valid_tips]
-                sel = st.selectbox(f"确认{i+1}", opts, key=f"sel_{name}_{i}", label_visibility="collapsed")
+                sel = st.selectbox(f"确认{i+1}", opts, key=f"sel_{i}", label_visibility="collapsed")
+                # 提取坐标
                 loc = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
                 current_coords.append(loc)
             else:
@@ -183,21 +183,21 @@ else:
                         dist_meter = int(res['route']['paths'][0]['distance'])
                         dist_km = int(dist_meter / 1000)
                         
-                        # 重要：先存入状态再 rerun
+                        # 【核心修复】同步状态并强制刷新
                         st.session_state['km_auto'] = dist_km
                         st.session_state['last_calc_success'] = True
-                        st.toast(f"里程 {dist_km}km 已同步至左侧面板")
+                        st.toast(f"✅ 里程 {dist_km}km 已同步")
                         time.sleep(0.5)
-                        st.rerun()
+                        st.rerun() # 重新运行以确保左侧 sidebar 的 number_input 获取到新值
                     else:
-                        st.session_state['last_calc_success'] = False
                         st.error(f"❌ 测距失败：{res.get('info')}")
                 except Exception as e:
-                    st.session_state['last_calc_success'] = False
                     st.error(f"🌐 网络请求异常")
 
-    # 圈起来的1：规划成功显示区域 (放在按钮下方，确保 rerun 后依然存在)
-    if st.session_state.get('last_calc_success') and st.session_state['km_auto'] > 0:
+    # 结果显示区：只要状态里有成功记录就显示（不受 rerun 影响）
+    if st.session_state['last_calc_success'] and st.session_state['km_auto'] > 0:
         st.success(f"✅ 规划成功！总里程：{st.session_state['km_auto']} KM")
-    elif len(st.session_state['confirmed_sites']) > 0 and len(current_coords) < 2:
-        st.warning("⚠️ 至少需要确认两个有效站点才能计算里程")
+        if st.button("🧹 清除当前里程"):
+            st.session_state['km_auto'] = 0
+            st.session_state['last_calc_success'] = False
+            st.rerun()
