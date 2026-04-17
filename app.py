@@ -12,7 +12,7 @@ BAIDU_OCR_AK = "1vBiCqNtSYFRx6GYsGwpwXdM"
 BAIDU_OCR_SK = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
 AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
-st.set_page_config(page_title="九江祥隆报价系统-旗舰版", layout="wide", page_icon="🚌")
+st.set_page_config(page_title="彭发军学习报价系统-旗舰版", layout="wide", page_icon="🚌")
 
 # 样式美化
 st.markdown("""
