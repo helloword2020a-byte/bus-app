@@ -4,6 +4,7 @@ import requests
 import re
 import base64
 import json
+import time
 
 # ==================== 1. 核心密钥与配置 ====================
 AI_API_KEY_V2 = "bce-v3/ALTAK-EMZixkEbLJ0iEkFcaJCFc/74514893890101d198dd642b3b95ea68bed95897"
@@ -155,14 +156,27 @@ with m_right:
 
         if len(current_coords) >= 2:
             if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
-                org, des = current_coords[0], current_coords[-1]
-                way = ";".join(current_coords[1:-1])
-                d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
-                try:
-                    res = requests.get(d_url).json()
-                    if res['status'] == '1':
-                        dist = int(res['route']['paths'][0]['distance']) / 1000
-                        st.session_state['km_auto'] = int(dist)
-                        st.success(f"🚩 规划成功！总里程：{int(dist)} KM")
-                        st.rerun()
-                except: st.error("测距失败，请检查站点选择")
+                with st.spinner("正在进行路线规划与计算..."):
+                    org, des = current_coords[0], current_coords[-1]
+                    way = ";".join(current_coords[1:-1])
+                    d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
+                    
+                    try:
+                        response = requests.get(d_url, timeout=10)
+                        res = response.json()
+                        
+                        if res.get('status') == '1' and 'route' in res:
+                            dist_str = res['route']['paths'][0]['distance']
+                            dist = int(dist_str) / 1000
+                            # 核心更新：先更新状态并成功提示
+                            st.session_state['km_auto'] = int(dist)
+                            st.success(f"🚩 规划成功！总里程：{int(dist)} KM")
+                            st.toast("里程已同步至报价中心")
+                            time.sleep(0.5) # 给用户一点反馈时间
+                            st.rerun()
+                        else:
+                            # 接口层面的失败报错
+                            info = res.get('info', '未知错误')
+                            st.error(f"测距接口报错：{info}")
+                    except Exception as e:
+                        st.error(f"地图测距请求异常: {str(e)}")
