@@ -3,45 +3,45 @@ import pandas as pd
 import requests
 import re
 import base64
-import time
+import json
 
-# ==================== 1. 页面配置与样式 ====================
-st.set_page_config(page_title="九江祥隆报价系统-旗舰版", page_icon="🚌", layout="wide")
+# ==================== 1. 核心密钥与配置 ====================
+AI_API_KEY_V2 = "bce-v3/ALTAK-EMZixkEbLJ0iEkFcaJCFc/74514893890101d198dd642b3b95ea68bed95897"
+BAIDU_OCR_AK = "1vBiCqNtSYFRx6GYsGwpwXdM"         
+BAIDU_OCR_SK = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
+AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
 
+st.set_page_config(page_title="九江祥隆报价系统-旗舰版", layout="wide", page_icon="🚌")
+
+# 样式美化
 st.markdown("""
 <style>
     .main-header { background: linear-gradient(135deg, #1a3a5c 0%, #2563a8 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-    .price-box { background: #f0f7ff; border: 2px solid #3b82f6; border-radius: 10px; padding: 15px; text-align: center; margin: 10px 0; }
-    .price-amount { font-size: 1.8rem; font-weight: 700; color: #1d4ed8; }
-    .station-container { max-height: 550px; overflow-y: auto; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
     .stButton > button { border-radius: 8px !important; }
+    .station-box { background: #f8fafc; border-radius: 10px; border: 1px solid #e2e8f0; padding: 15px; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 2. 状态初始化 ====================
+# 状态初始化
 _defaults = {
     'ocr_raw': "", 
-    'temp_preview_text': "",     # 缓冲区地名（可修改）
-    'final_station_list': [],    # 同步后的正式站点
+    'sites_preview': "",   # 中间缓冲区（可修改的地名列表）
+    'confirmed_sites': [], # 点击“同步”后确定的列表
     'km_auto': 0
 }
 for k, v in _defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
-AMAP_KEY = "5f1fff45fdb87c675a67685b8e0e6a74"
-AI_KEY = "bce-v3/ALTAK-EMZixkEbLJ0iEkFcaJCFc/74514893890101d198dd642b3b95ea68bed95897"
+# ==================== 2. 后端引擎函数 ====================
 
-# ==================== 3. 核心功能函数 ====================
-
-def get_baidu_token():
-    try:
-        url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=1vBiCqNtSYFRx6GYsGwpwXdM&client_secret=ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"
-        return requests.get(url).json().get("access_token")
+def get_ocr_token():
+    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_OCR_AK}&client_secret={BAIDU_OCR_SK}"
+    try: return requests.get(url).json().get("access_token")
     except: return None
 
 def ocr_engine(file_bytes):
-    token = get_baidu_token()
-    if not token: return "Token获取失败"
+    token = get_ocr_token()
+    if not token: return "OCR 授权失败"
     img64 = base64.b64encode(file_bytes).decode()
     url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={token}"
     try:
@@ -49,113 +49,120 @@ def ocr_engine(file_bytes):
         return "".join([i['words'] for i in res.get('words_result', [])])
     except: return "识别异常"
 
-def rule_extract(text):
-    clean = re.sub(r'\(.*?\)|（.*?）|\d+\.?\d*|[^\u4e00-\u9fa5\s,，]', ' ', text or "")
-    for word in ['接', '送', '前往', '返程', '车程', '住', '小时', '公里', '行程']: 
+def ai_extract_locations(text):
+    url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-128k"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {AI_API_KEY_V2}"}
+    prompt = f"你是一个专业的旅游调度。请从以下文本提取目的地地名，用空格分隔。不要输出无关词汇。原文：{text}"
+    payload = {"messages": [{"role": "user", "content": prompt}]}
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=15).json()
+        return res.get("result", "").strip()
+    except: return ""
+
+def rule_extract_locations(text):
+    if not text: return ""
+    clean = re.sub(r'\(.*?\)|（.*?）|\d+\.?\d*|[^\u4e00-\u9fa5\s]', ' ', text)
+    for word in ['接', '送', '前往', '返程', '车程', '住', '公里']:
         clean = clean.replace(word, ' ')
-    return "，".join(clean.split())
+    return " ".join(clean.split()).strip()
 
-# ==================== 4. 界面布局 ====================
-
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 计费自定义 + 缓冲同步模式</p></div>', unsafe_allow_html=True)
-
-col_calc, col_extract, col_confirm = st.columns([0.9, 1.1, 1.3])
+# ==================== 3. 界面布局 ====================
 
 # --- 左侧：报价核算中心 ---
-with col_calc:
-    st.subheader("📊 报价核算中心")
-    with st.container(border=True):
-        st.write("⚙️ **计费标准设置**")
-        ca, cb = st.columns(2)
-        b39 = ca.number_input("39座起步费", value=800)
-        p39 = cb.number_input("39座单价", value=2.60)
-        b56 = ca.number_input("56座起步费", value=1000)
-        p56 = cb.number_input("56座单价", value=3.60)
-        
-        st.divider()
-        # 这里接收右侧测出来的公里数
-        f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'], step=1)
-        f_days = st.number_input("用车总天数", value=4, step=1)
-        
-        # 计算逻辑
-        res39 = int(f_km * p39 + f_days * b39)
-        res56 = int(f_km * p56 + f_days * b56)
-        
-        st.markdown(f'<div class="price-box"><small>39座预估总价</small><div class="price-amount">{res39} 元</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="price-box"><small>56座预估总价</small><div class="price-amount">{res56} 元</div></div>', unsafe_allow_html=True)
-    
-    # 报价单副本
-    st.write("📋 **报价单草稿**")
-    copy_text = f"【九江祥隆报价】\n里程：{f_km}KM | 天数：{f_days}天\n---\n39座大巴：{res39}元\n56座大巴：{res56}元"
-    st.text_area("复制结果文案", value=copy_text, height=120)
-
-# --- 中间：地名缓冲区 ---
-with col_extract:
-    st.subheader("1️⃣ 行程解析提取")
-    up_file = st.file_uploader("上传截图", type=["jpg", "png", "jpeg"])
-    if up_file and st.button("🚀 开始识别图片文字", use_container_width=True):
-        with st.spinner("识别中..."):
-            st.session_state['ocr_raw'] = ocr_engine(up_file.read())
-    
-    ocr_res = st.text_area("OCR原文内容", value=st.session_state['ocr_raw'], height=100)
-    
-    c1, c2 = st.columns(2)
-    if c1.button("✨ AI 智能提取", use_container_width=True):
-        # 此处模拟AI提取逻辑
-        st.session_state['temp_preview_text'] = "九江，吉安，上饶"
-    if c2.button("🤖 规则辅助提取", use_container_width=True):
-        st.session_state['temp_preview_text'] = rule_extract(ocr_res)
+with st.sidebar:
+    st.header("📊 报价核算中心")
+    with st.expander("⚙️ 计费标准设置", expanded=True):
+        col_a, col_b = st.columns(2)
+        b39 = col_a.number_input("39起步费", 800)
+        p39 = col_b.number_input("39单价", 2.6)
+        b56 = col_a.number_input("56起步费", 1000)
+        p56 = col_b.number_input("56单价", 3.6)
     
     st.divider()
-    # 手动修改区
-    edited_sites = st.text_area(
-        "🖊️ 地名缓冲区 (提取后可手动增删改)", 
-        value=st.session_state['temp_preview_text'], 
-        height=150,
-        help="修改完成后点击下方按钮同步"
-    )
-    st.session_state['temp_preview_text'] = edited_sites
+    f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
+    f_days = st.number_input("用车总天数", value=4)
+    
+    res_39 = int(f_km * p39 + f_days * b39)
+    res_56 = int(f_km * p56 + f_days * b56)
+    
+    st.metric("39座预估", f"{res_39} 元")
+    st.metric("56座预估", f"{res_56} 元")
+    
+    st.divider()
+    quote_text = f"【九江祥隆报价单】\n里程：{f_km}KM | 天数：{f_days}天\n---\n39座大巴：{res_39}元\n56座大巴：{res_56}元"
+    st.text_area("报价文案：", value=quote_text, height=120)
 
-    if st.button("🚀 确认并同步到站点", type="primary", use_container_width=True):
-        site_list = re.split(r'[，,\s]+', edited_sites)
-        st.session_state['final_station_list'] = [s.strip() for s in site_list if s.strip()]
+# --- 主界面 ---
+st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | AI提取 + 缓冲同步逻辑</p></div>', unsafe_allow_html=True)
+
+m_left, m_right = st.columns([1, 1.2])
+
+# --- 1️⃣ 文字识别与提取 (中间) ---
+with m_left:
+    st.subheader("1️⃣ 行程解析提取")
+    up_file = st.file_uploader("上传行程截图", type=["jpg", "png", "jpeg"])
+    if up_file and st.button("🚀 识别图片文字", use_container_width=True):
+        st.session_state['ocr_raw'] = ocr_engine(up_file.read())
+    
+    raw_txt = st.text_area("OCR识别结果：", value=st.session_state['ocr_raw'], height=150)
+    
+    col1, col2 = st.columns(2)
+    if col1.button("✨ 智能 AI 提取", use_container_width=True):
+        st.session_state['sites_preview'] = ai_extract_locations(raw_txt)
+    if col2.button("🤖 自动规则提取", use_container_width=True):
+        st.session_state['sites_preview'] = rule_extract_locations(raw_txt)
+    
+    st.divider()
+    # 【核心】：地名缓冲区，允许手动修改
+    edited_sites = st.text_area("🖊️ 提取地名列表 (可在此增删改地名)", 
+                                value=st.session_state['sites_preview'], 
+                                height=100, 
+                                help="地名请用空格或逗号分隔")
+    st.session_state['sites_preview'] = edited_sites # 保持状态同步
+
+    if st.button("✅ 确认并同步到站点框", type="primary", use_container_width=True):
+        # 处理多种分隔符
+        names = re.split(r'[，,\s]+', edited_sites)
+        st.session_state['confirmed_sites'] = [n.strip() for n in names if n.strip()]
         st.rerun()
 
-# --- 右侧：站点确认与测距 ---
-with col_confirm:
+# --- 2️⃣ 站点确认与公里数 (右侧) ---
+with m_right:
     st.subheader("2️⃣ 站点位置确认")
     current_coords = []
     
-    if not st.session_state['final_station_list']:
-        st.info("💡 请在中间区域提取并同步站点")
+    if not st.session_state['confirmed_sites']:
+        st.info("💡 请在左侧解析地名后点击“同步”按钮")
     else:
-        st.markdown('<div class="station-container">', unsafe_allow_html=True)
-        for i, name in enumerate(st.session_state['final_station_list']):
-            with st.container(border=True):
-                search_kw = st.text_input(f"站{i+1} 搜索", value=name, key=f"site_{i}")
+        for i, name in enumerate(st.session_state['confirmed_sites']):
+            with st.container():
+                st.markdown(f'<div class="station-box">', unsafe_allow_html=True)
+                # 【动态 Key 修复点】：key 中包含 name，地名一变，框就强制更新
+                search_kw = st.text_input(f"站{i+1} 搜索关键词", value=name, key=f"inp_{name}_{i}")
+                
+                # 高德搜索
                 t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={search_kw}&key={AMAP_KEY}"
                 try:
                     tips = requests.get(t_url, timeout=5).json().get('tips', [])
-                    valid = [t for t in tips if t.get('location')]
+                    valid = [t for t in tips if isinstance(t.get('location'), str) and t.get('location')]
                     if valid:
                         opts = [f"{t['name']} ({t.get('district','')})" for t in valid]
-                        sel = st.selectbox(f"确认具体位置", options=opts, key=f"sel_{i}")
+                        sel = st.selectbox(f"确认具体位置 {i+1}", opts, key=f"sel_{name}_{i}")
                         loc = next(t['location'] for t in valid if sel.startswith(t['name']))
                         current_coords.append(loc)
                 except: pass
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
         if len(current_coords) >= 2:
-            st.write("")
-            if st.button("🗺️ 开始导航计算里程", type="primary", use_container_width=True):
-                with st.spinner("计算中..."):
-                    org, des = current_coords[0], current_coords[-1]
-                    way = ";".join(current_coords[1:-1])
-                    d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
+            if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
+                org, des = current_coords[0], current_coords[-1]
+                way = ";".join(current_coords[1:-1])
+                d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
+                try:
                     res = requests.get(d_url).json()
                     if res['status'] == '1':
-                        st.session_state['km_auto'] = int(int(res['route']['paths'][0]['distance']) / 1000)
+                        dist = int(res['route']['paths'][0]['distance']) / 1000
+                        st.session_state['km_auto'] = int(dist)
+                        st.success(f"🚩 规划成功！总里程：{int(dist)} KM")
                         st.rerun()
-
-    if st.session_state['km_auto'] > 0:
-        st.success(f"🚩 规划完成！总里程：{st.session_state['km_auto']} KM")
+                except: st.error("测距失败，请检查站点选择")
