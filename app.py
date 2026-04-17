@@ -29,7 +29,8 @@ _defaults = {
     'ocr_raw': "", 
     'sites_preview': "",   
     'confirmed_sites': [], 
-    'km_auto': 0
+    'km_auto': 0,
+    'last_calc_success': False  # 新增：记录上次计算是否成功
 }
 for k, v in _defaults.items():
     if k not in st.session_state: st.session_state[k] = v
@@ -92,7 +93,11 @@ with st.sidebar:
         p56 = col_b.number_input("56单价", 3.6)
     
     st.divider()
-    f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
+    # 圈起来的3：实测总公里
+    f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'], key="manual_km_input")
+    # 如果手动修改了值，同步回 session_state
+    st.session_state['km_auto'] = f_km
+    
     f_days = st.number_input("用车总天数", value=4)
     
     res_39 = int(f_km * p39 + f_days * b39)
@@ -106,7 +111,7 @@ with st.sidebar:
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑布局 & 测距逻辑优化</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑布局 & 状态保持优化</p></div>', unsafe_allow_html=True)
 
 # 第一行：解析提取
 st.subheader("1️⃣ 行程解析提取")
@@ -122,8 +127,10 @@ with c2:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("✨ 智能 AI 提取", use_container_width=True):
         st.session_state['sites_preview'] = ai_extract_locations(st.session_state['ocr_raw'])
+        st.session_state['last_calc_success'] = False # 重置计算状态
     if st.button("🤖 自动规则提取", use_container_width=True):
         st.session_state['sites_preview'] = rule_extract_locations(st.session_state['ocr_raw'])
+        st.session_state['last_calc_success'] = False # 重置计算状态
     
 with c3:
     edited_sites = st.text_area("🖊️ 提取地名列表 (可修改)", value=st.session_state['sites_preview'], height=80)
@@ -131,6 +138,7 @@ with c3:
     if st.button("✅ 确认并同步到下方站点", type="primary", use_container_width=True):
         names = re.split(r'[，,\s]+', edited_sites)
         st.session_state['confirmed_sites'] = [n.strip() for n in names if n.strip()]
+        st.session_state['last_calc_success'] = False # 重置计算状态
         st.rerun()
 
 st.divider()
@@ -159,6 +167,12 @@ else:
                 st.caption("⚠️ 未找到位置")
 
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 圈起来的1：规划成功显示区域
+    # 我们把显示逻辑放在按钮外面，只要 session_state 里有成功标志就显示
+    if st.session_state['last_calc_success']:
+        st.success(f"✅ 规划成功！总里程：{st.session_state['km_auto']} KM")
+
     if len(current_coords) >= 2:
         if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
             with st.spinner("正在进行路径规划..."):
@@ -171,22 +185,23 @@ else:
                     res = response.json()
                     
                     if res.get('status') == '1' and 'route' in res:
-                        # 提取距离（单位：米 -> 公里）
                         dist_meter = int(res['route']['paths'][0]['distance'])
                         dist_km = int(dist_meter / 1000)
                         
-                        # 更新状态
+                        # 核心改进：更新状态标志
                         st.session_state['km_auto'] = dist_km
-                        st.success(f"✅ 规划成功！总里程：{dist_km} KM")
+                        st.session_state['last_calc_success'] = True
+                        
+                        # 圈起来的2：弹窗提示
                         st.toast(f"里程 {dist_km}km 已同步至左侧面板")
                         time.sleep(0.5)
                         st.rerun()
                     else:
-                        # API 返回了错误状态码
+                        st.session_state['last_calc_success'] = False
                         err_info = res.get('info', '未知错误')
-                        st.error(f"❌ 测距失败：{err_info} (请检查站点是否过于偏僻或无法驾车到达)")
+                        st.error(f"❌ 测距失败：{err_info}")
                 except Exception as e:
-                    # 网络层面的报错
+                    st.session_state['last_calc_success'] = False
                     st.error(f"🌐 网络请求异常: {str(e)}")
     elif len(st.session_state['confirmed_sites']) > 0:
         st.warning("⚠️ 至少需要确认两个有效站点才能计算里程")
