@@ -106,7 +106,7 @@ with st.sidebar:
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑布局 & 测距逻辑优化</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🚌 彭发军学习报价系统</h1><p>旗舰版 | 紧凑布局 & 测距逻辑优化</p></div>', unsafe_allow_html=True)
 
 # 第一行：解析提取
 st.subheader("1️⃣ 行程解析提取")
