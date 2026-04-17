@@ -19,16 +19,20 @@ st.markdown("""
 <style>
     .main-header { background: linear-gradient(135deg, #1a3a5c 0%, #2563a8 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
     .stButton > button { border-radius: 8px !important; }
+    /* 紧凑型站点显示 */
     .compact-label { font-size: 14px; color: #64748b; margin-bottom: 5px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # 状态初始化
-if 'ocr_raw' not in st.session_state: st.session_state['ocr_raw'] = ""
-if 'sites_preview' not in st.session_state: st.session_state['sites_preview'] = ""
-if 'confirmed_sites' not in st.session_state: st.session_state['confirmed_sites'] = []
-if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
-if 'last_calc_success' not in st.session_state: st.session_state['last_calc_success'] = False
+_defaults = {
+    'ocr_raw': "", 
+    'sites_preview': "",   
+    'confirmed_sites': [], 
+    'km_auto': 0
+}
+for k, v in _defaults.items():
+    if k not in st.session_state: st.session_state[k] = v
 
 # ==================== 2. 后端引擎函数 ====================
 
@@ -88,18 +92,8 @@ with st.sidebar:
         p56 = col_b.number_input("56单价", 3.6)
     
     st.divider()
-    
-    # 【修复重点】使用 session_state 直接作为 number_input 的值，并监听手动修改
-    f_km = st.number_input(
-        "实测总公里 (KM)", 
-        min_value=0, 
-        value=int(st.session_state['km_auto']), 
-        key="km_input_field"
-    )
-    # 确保手动修改输入框时同步回状态
-    st.session_state['km_auto'] = f_km
-    
-    f_days = st.number_input("用车总天数", value=4, min_value=1)
+    f_km = st.number_input("实测总公里 (KM)", value=st.session_state['km_auto'])
+    f_days = st.number_input("用车总天数", value=4)
     
     res_39 = int(f_km * p39 + f_days * b39)
     res_56 = int(f_km * p56 + f_days * b56)
@@ -112,7 +106,7 @@ with st.sidebar:
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑布局 & 状态保持优化</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑型布局优化</p></div>', unsafe_allow_html=True)
 
 # 第一行：解析提取
 st.subheader("1️⃣ 行程解析提取")
@@ -141,11 +135,12 @@ with c3:
 
 st.divider()
 
-# 第二行：站点横向排列确认
+# 第二行：站点横向排列确认 (你要求改进的地方)
 st.subheader("2️⃣ 站点位置确认")
 if not st.session_state['confirmed_sites']:
     st.info("💡 请在上方解析地名后点击“确认并同步”")
 else:
+    # 动态创建列，每行放 4 个站点（如果站点很多会自动适应）
     num_sites = len(st.session_state['confirmed_sites'])
     cols = st.columns(num_sites if num_sites > 0 else 1)
     
@@ -153,51 +148,34 @@ else:
     for i, name in enumerate(st.session_state['confirmed_sites']):
         with cols[i]:
             st.markdown(f'<p class="compact-label">🚩 第 {i+1} 站</p>', unsafe_allow_html=True)
-            search_kw = st.text_input(f"搜索{i+1}", value=name, key=f"inp_{i}", label_visibility="collapsed")
+            # 搜索词
+            search_kw = st.text_input(f"搜索{i+1}", value=name, key=f"inp_{name}_{i}", label_visibility="collapsed")
             
+            # 获取建议
             valid_tips = get_amap_tips(search_kw)
             if valid_tips:
                 opts = [f"{t['name']} ({t.get('district','')})" for t in valid_tips]
-                sel = st.selectbox(f"确认{i+1}", opts, key=f"sel_{i}", label_visibility="collapsed")
-                # 提取坐标
+                sel = st.selectbox(f"确认{i+1}", opts, key=f"sel_{name}_{i}", label_visibility="collapsed")
                 loc = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
                 current_coords.append(loc)
             else:
-                st.caption("⚠️ 未找到位置")
+                st.caption("⚠️ 未找到")
 
+    # 计算里程按钮
     st.markdown("<br>", unsafe_allow_html=True)
-    
-    # --- 导航计算区域 ---
     if len(current_coords) >= 2:
         if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
-            with st.spinner("正在进行路径规划..."):
+            with st.spinner("正在测距..."):
                 org, des = current_coords[0], current_coords[-1]
                 way = ";".join(current_coords[1:-1])
                 d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
-                
                 try:
-                    response = requests.get(d_url, timeout=10)
-                    res = response.json()
-                    
-                    if res.get('status') == '1' and 'route' in res:
-                        dist_meter = int(res['route']['paths'][0]['distance'])
-                        dist_km = int(dist_meter / 1000)
-                        
-                        # 【核心修复】同步状态并强制刷新
-                        st.session_state['km_auto'] = dist_km
-                        st.session_state['last_calc_success'] = True
-                        st.toast(f"✅ 里程 {dist_km}km 已同步")
-                        time.sleep(0.5)
-                        st.rerun() # 重新运行以确保左侧 sidebar 的 number_input 获取到新值
-                    else:
-                        st.error(f"❌ 测距失败：{res.get('info')}")
-                except Exception as e:
-                    st.error(f"🌐 网络请求异常")
-
-    # 结果显示区：只要状态里有成功记录就显示（不受 rerun 影响）
-    if st.session_state['last_calc_success'] and st.session_state['km_auto'] > 0:
-        st.success(f"✅ 规划成功！总里程：{st.session_state['km_auto']} KM")
-        if st.button("🧹 清除当前里程"):
-            st.session_state['km_auto'] = 0
-            st.session_state['last_calc_success'] = False
-            st.rerun()
+                    res = requests.get(d_url, timeout=10).json()
+                    if res.get('status') == '1':
+                        dist = int(res['route']['paths'][0]['distance']) / 1000
+                        st.session_state['km_auto'] = int(dist)
+                        st.success(f"规划成功！总里程：{int(dist)} KM")
+                        time.sleep(0.3)
+                        st.rerun()
+                except:
+                    st.error("测距失败")
