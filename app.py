@@ -26,14 +26,27 @@ st.markdown("""
 # 状态初始化
 _defaults = {
     'ocr_raw': "", 
-    'sites_preview': "",   # 中间缓冲区（可修改的地名列表）
-    'confirmed_sites': [], # 点击“同步”后确定的列表
+    'sites_preview': "",   
+    'confirmed_sites': [], 
     'km_auto': 0
 }
 for k, v in _defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
 # ==================== 2. 后端引擎函数 ====================
+
+# 【新增优化：缓存搜索结果】设置 1 小时缓存，避免重复请求高德 API 导致卡顿
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_amap_tips(keyword):
+    if not keyword: return []
+    url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={keyword}&key={AMAP_KEY}"
+    try:
+        res = requests.get(url, timeout=5).json()
+        tips = res.get('tips', [])
+        # 只保留有具体坐标的结果
+        return [t for t in tips if isinstance(t.get('location'), str) and t.get('location')]
+    except:
+        return []
 
 def get_ocr_token():
     url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_OCR_AK}&client_secret={BAIDU_OCR_SK}"
@@ -72,7 +85,7 @@ def rule_extract_locations(text):
 # --- 左侧：报价核算中心 ---
 with st.sidebar:
     st.header("📊 报价核算中心")
-    with st.expander("⚙️ 计费标准设置", expanded=True):
+    with st.expander("⚙️计费标准设置", expanded=True):
         col_a, col_b = st.columns(2)
         b39 = col_a.number_input("39起步费", 800)
         p39 = col_b.number_input("39单价", 2.6)
@@ -94,7 +107,7 @@ with st.sidebar:
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | AI提取 + 缓冲同步逻辑</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 高速缓存优化</p></div>', unsafe_allow_html=True)
 
 m_left, m_right = st.columns([1, 1.2])
 
@@ -114,15 +127,12 @@ with m_left:
         st.session_state['sites_preview'] = rule_extract_locations(raw_txt)
     
     st.divider()
-    # 【核心】：地名缓冲区，允许手动修改
     edited_sites = st.text_area("🖊️ 提取地名列表 (可在此增删改地名)", 
                                 value=st.session_state['sites_preview'], 
-                                height=100, 
-                                help="地名请用空格或逗号分隔")
-    st.session_state['sites_preview'] = edited_sites # 保持状态同步
+                                height=100)
+    st.session_state['sites_preview'] = edited_sites 
 
     if st.button("✅ 确认并同步到站点框", type="primary", use_container_width=True):
-        # 处理多种分隔符
         names = re.split(r'[，,\s]+', edited_sites)
         st.session_state['confirmed_sites'] = [n.strip() for n in names if n.strip()]
         st.rerun()
@@ -135,48 +145,42 @@ with m_right:
     if not st.session_state['confirmed_sites']:
         st.info("💡 请在左侧解析地名后点击“同步”按钮")
     else:
+        # 遍历确认好的地名列表
         for i, name in enumerate(st.session_state['confirmed_sites']):
             with st.container():
                 st.markdown(f'<div class="station-box">', unsafe_allow_html=True)
-                # 【动态 Key 修复点】：key 中包含 name，地名一变，框就强制更新
                 search_kw = st.text_input(f"站{i+1} 搜索关键词", value=name, key=f"inp_{name}_{i}")
                 
-                # 高德搜索
-                t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={search_kw}&key={AMAP_KEY}"
-                try:
-                    tips = requests.get(t_url, timeout=5).json().get('tips', [])
-                    valid = [t for t in tips if isinstance(t.get('location'), str) and t.get('location')]
-                    if valid:
-                        opts = [f"{t['name']} ({t.get('district','')})" for t in valid]
-                        sel = st.selectbox(f"确认具体位置 {i+1}", opts, key=f"sel_{name}_{i}")
-                        loc = next(t['location'] for t in valid if sel.startswith(t['name']))
-                        current_coords.append(loc)
-                except: pass
+                # 【优化点】使用带缓存的搜索函数，避免每次点击按钮都去联网请求高德
+                valid_tips = get_amap_tips(search_kw)
+                
+                if valid_tips:
+                    opts = [f"{t['name']} ({t.get('district','')})" for t in valid_tips]
+                    sel = st.selectbox(f"确认具体位置 {i+1}", opts, key=f"sel_{name}_{i}")
+                    # 匹配经纬度
+                    loc = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
+                    current_coords.append(loc)
+                else:
+                    st.warning("未找到匹配位置，请修改搜索关键词")
                 st.markdown('</div>', unsafe_allow_html=True)
 
         if len(current_coords) >= 2:
             if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
-                with st.spinner("正在进行路线规划与计算..."):
+                with st.spinner("正在进行路线规划..."):
                     org, des = current_coords[0], current_coords[-1]
                     way = ";".join(current_coords[1:-1])
                     d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
                     
                     try:
-                        response = requests.get(d_url, timeout=10)
-                        res = response.json()
-                        
+                        res = requests.get(d_url, timeout=10).json()
                         if res.get('status') == '1' and 'route' in res:
-                            dist_str = res['route']['paths'][0]['distance']
-                            dist = int(dist_str) / 1000
-                            # 核心更新：先更新状态并成功提示
+                            dist = int(res['route']['paths'][0]['distance']) / 1000
                             st.session_state['km_auto'] = int(dist)
                             st.success(f"🚩 规划成功！总里程：{int(dist)} KM")
-                            st.toast("里程已同步至报价中心")
-                            time.sleep(0.5) # 给用户一点反馈时间
+                            st.toast("里程已同步")
+                            time.sleep(0.3)
                             st.rerun()
                         else:
-                            # 接口层面的失败报错
-                            info = res.get('info', '未知错误')
-                            st.error(f"测距接口报错：{info}")
+                            st.error(f"测距失败: {res.get('info')}")
                     except Exception as e:
-                        st.error(f"地图测距请求异常: {str(e)}")
+                        st.error(f"网络异常: {str(e)}")
