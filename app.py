@@ -3,9 +3,8 @@ import pandas as pd
 import requests
 import re
 import base64
-import json
 
-# ==================== 1. 核心密钥配置 (完整保留) ====================
+# ==================== 1. 核心密钥配置 ====================
 AI_API_KEY_V2 = "bce-v3/ALTAK-EMZixkEbLJ0iEkFcaJCFc/74514893890101d198dd642b3b95ea68bed95897"
 BAIDU_OCR_AK = "1vBiCqNtSYFRx6GYsGwpwXdM"         
 BAIDU_OCR_SK = "ObUQToQCiOIaUTtBhMivJhA4nAhRdMvO"  
@@ -25,53 +24,44 @@ st.markdown("""
         border-radius: 8px;
         background-color: #fafafa;
     }
-    .stTextArea textarea { font-size: 14px !important; }
+    .preview-area {
+        border: 2px solid #ff4b4b !important;
+        border-radius: 5px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # 状态初始化
 if 'ocr_raw' not in st.session_state: st.session_state['ocr_raw'] = ""
-if 'temp_sites' not in st.session_state: st.session_state['temp_sites'] = "" # 提取出的临时文本
-if 'final_stations' not in st.session_state: st.session_state['final_stations'] = [] # 点击填充后的正式列表
+if 'temp_preview_text' not in st.session_state: st.session_state['temp_preview_text'] = "" 
+if 'final_station_list' not in st.session_state: st.session_state['final_station_list'] = [] 
 if 'km_auto' not in st.session_state: st.session_state['km_auto'] = 0
 
-# ==================== 3. 核心后端函数 ====================
-def get_ocr_token():
-    url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_OCR_AK}&client_secret={BAIDU_OCR_SK}"
-    try: return requests.get(url).json().get("access_token")
-    except: return None
-
+# ==================== 3. 核心功能引擎 ====================
 def ocr_engine(file_bytes):
-    token = get_ocr_token()
-    if not token: return "OCR 授权失败"
+    token = requests.get(f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={BAIDU_OCR_AK}&client_secret={BAIDU_OCR_SK}").json().get("access_token")
     img64 = base64.b64encode(file_bytes).decode()
     url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token={token}"
-    try:
-        res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
-        return "".join([i['words'] for i in res.get('words_result', [])])
-    except: return "识别异常"
+    res = requests.post(url, data={"image": img64}, headers={'Content-Type': 'application/x-www-form-urlencoded'}).json()
+    return "".join([i['words'] for i in res.get('words_result', [])])
 
 def ai_extract(text):
     url = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/ernie-speed-128k"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {AI_API_KEY_V2}"}
-    prompt = f"提取目的地地名，地名间用空格分隔。原文：{text}"
-    try:
-        res = requests.post(url, headers=headers, json={"messages": [{"role": "user", "content": prompt}]}).json()
-        clean = re.sub(r'[^\u4e00-\u9fa5\s]', ' ', res.get("result", ""))
-        return " ".join(clean.split())
-    except: return ""
+    prompt = f"提取目的地地名，空格分隔。原文：{text}"
+    res = requests.post(url, headers=headers, json={"messages": [{"role": "user", "content": prompt}]}).json()
+    return " ".join(re.sub(r'[^\u4e00-\u9fa5\s]', ' ', res.get("result", "")).split())
 
 def rule_extract(text):
     clean = re.sub(r'\(.*?\)|（.*?）|\d+\.?\d*|[^\u4e00-\u9fa5\s]', ' ', text or "")
-    for word in ['接', '送', '前往', '返程', '车程', '住', '小时', '公里']:
-        clean = clean.replace(word, ' ')
+    for word in ['接', '送', '前往', '返程', '车程', '住', '小时', '公里']: clean = clean.replace(word, ' ')
     return " ".join(clean.split())
 
 # ==================== 4. 经典三列布局 ====================
-col_side, col_mid, col_right = st.columns([0.8, 1, 1.2])
+col_calc, col_extract, col_confirm = st.columns([0.8, 1, 1.2])
 
-# --- 第一柱：报价中心 ---
-with col_side:
+# --- 左侧：报价单 ---
+with col_calc:
     st.header("📊 报价核算")
     with st.form("price_form"):
         c1, c2 = st.columns(2)
@@ -83,71 +73,65 @@ with col_side:
     
     res39, res56 = int(f_km*p39 + f_days*b39), int(f_km*p56 + f_days*b56)
     st.success(f"39座: {res39} 元 | 56座: {res56} 元")
-    st.text_area("文案副本", f"行程:{f_km}KM\n39座:{res39}元\n56座:{res56}元", height=100)
 
-# --- 第二柱：识别与提取 (增加手动修正) ---
-with col_mid:
+# --- 中间：行程提取区 ---
+with col_extract:
     st.header("1️⃣ 提取行程")
-    up_file = st.file_uploader("上传行程截图", type=["jpg", "png"])
-    if up_file and st.button("开始识别文字", use_container_width=True):
+    up_file = st.file_uploader("上传截图", type=["jpg", "png"])
+    if up_file and st.button("识别文字", use_container_width=True):
         st.session_state['ocr_raw'] = ocr_engine(up_file.read())
     
-    ocr_edit = st.text_area("OCR原文校对", value=st.session_state['ocr_raw'], height=150)
+    ocr_edit = st.text_area("OCR文本校对", value=st.session_state['ocr_raw'], height=150)
     
-    # 双模提取按钮
-    ca, cb = st.columns(2)
-    if ca.button("✨ AI 提取", use_container_width=True):
-        st.session_state['temp_sites'] = ai_extract(ocr_edit)
-    if cb.button("🤖 规则提取", use_container_width=True):
-        st.session_state['temp_sites'] = rule_extract(ocr_edit)
+    c_btn1, c_btn2 = st.columns(2)
+    if c_btn1.button("✨ AI 提取", use_container_width=True):
+        st.session_state['temp_preview_text'] = ai_extract(ocr_edit)
+    if c_btn2.button("🤖 规则提取", use_container_width=True):
+        st.session_state['temp_preview_text'] = rule_extract(ocr_edit)
     
-    # 【新增改进】：提取结果预览区改为可编辑的文本框
     st.write("---")
-    final_preview = st.text_area("🖊️ 提取结果预览(可在此手动修改)：", 
-                                value=st.session_state['temp_sites'], 
-                                help="如果自动提取不准，请直接在这里增删地名，用空格分隔",
-                                height=100)
-    # 同步手动修改的内容到临时状态
-    st.session_state['temp_sites'] = final_preview
-
-    # 【填充按钮】：只有点这个，右侧才会生成站点
+    # 【预览框】：支持人工修改
+    modified_text = st.text_area("🖊️ 提取结果预览(在此人工修正)", 
+                                 value=st.session_state['temp_preview_text'], 
+                                 height=100, 
+                                 help="请确保地名之间用空格隔开")
+    
+    # 【唯一触发按钮】：点击才更新右侧
     if st.button("🚀 确认并填充至站点", type="primary", use_container_width=True):
-        st.session_state['final_stations'] = st.session_state['temp_sites'].split()
+        st.session_state['final_station_list'] = modified_text.split()
         st.rerun()
 
-# --- 第三柱：站点确认与测距 (独立滚动) ---
-with col_right:
+# --- 右侧：站点确认区 ---
+with col_confirm:
     st.header("2️⃣ 站点确认")
-    
     st.markdown('<div class="scroll-container">', unsafe_allow_html=True)
     
     current_coords = []
-    # 循环生成站点框
-    for i, name in enumerate(st.session_state['final_stations']):
+    # 【逻辑核心】：循环生成的列表仅基于 final_station_list
+    for i, name in enumerate(st.session_state['final_station_list']):
         with st.container(border=True):
-            # 站点框人工输入：支持修改单个站点搜索词
-            kw = st.text_input(f"站{i+1} 搜索词", value=name, key=f"kw_{i}")
-            t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={kw}&key={AMAP_KEY}"
+            # 搜索框：根据填充的地名自动发起高德联想
+            search_kw = st.text_input(f"站{i+1} 关键词", value=name, key=f"kw_{i}")
+            t_url = f"https://restapi.amap.com/v3/assistant/inputtips?keywords={search_kw}&key={AMAP_KEY}"
             try:
                 tips = requests.get(t_url, timeout=5).json().get('tips', [])
-                valid = [t for t in tips if isinstance(t.get('location'), str) and t.get('location')]
+                valid = [t for t in tips if t.get('location')]
                 if valid:
-                    sel = st.selectbox(f"确认站{i+1}", [f"{t['name']} ({t.get('district','')})" for t in valid], key=f"sel_{i}")
+                    sel = st.selectbox(f"请确认精准地址 (站{i+1})", 
+                                       options=[f"{t['name']} ({t.get('district','')})" for t in valid], 
+                                       key=f"sel_{i}")
                     current_coords.append(next(t['location'] for t in valid if sel.startswith(t['name'])))
             except: pass
             
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 计算按钮：不点击不测距
+    # 最终测距按钮
     if len(current_coords) >= 2:
         st.divider()
-        if st.button("🗺️ 确认站点，开始规划测距", use_container_width=True, type="primary"):
+        if st.button("🗺️ 开始规划测距", use_container_width=True, type="primary"):
             org, des, way = current_coords[0], current_coords[-1], ";".join(current_coords[1:-1])
             d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
-            try:
-                res = requests.get(d_url).json()
-                if res['status'] == '1':
-                    st.session_state['km_auto'] = int(int(res['route']['paths'][0]['distance']) / 1000)
-                    st.success(f"计算成功：{st.session_state['km_auto']} KM")
-                    st.rerun()
-            except: st.error("测距失败")
+            res = requests.get(d_url).json()
+            if res['status'] == '1':
+                st.session_state['km_auto'] = int(int(res['route']['paths'][0]['distance']) / 1000)
+                st.rerun()
