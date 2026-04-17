@@ -102,7 +102,7 @@ with st.sidebar:
     st.metric("56座预估", f"{res_56} 元")
     
     st.divider()
-    quote_text = f"【九江祥隆报价单】\n里程：{f_km}KM | 天数：{f_days}天\n---\n39座大巴：{res_39}元\n56座大巴：{res_56}元"
+    quote_text = f"【祥龙报价单】\n里程：{f_km}KM | 天数：{f_days}天\n---\n39座大巴：{res_39}元\n56座大巴：{res_56}元"
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
