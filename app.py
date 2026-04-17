@@ -19,7 +19,8 @@ st.markdown("""
 <style>
     .main-header { background: linear-gradient(135deg, #1a3a5c 0%, #2563a8 100%); color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
     .stButton > button { border-radius: 8px !important; }
-    .station-box { background: #f8fafc; border-radius: 10px; border: 1px solid #e2e8f0; padding: 15px; margin-bottom: 10px; }
+    /* 紧凑型站点显示 */
+    .compact-label { font-size: 14px; color: #64748b; margin-bottom: 5px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -35,7 +36,6 @@ for k, v in _defaults.items():
 
 # ==================== 2. 后端引擎函数 ====================
 
-# 【新增优化：缓存搜索结果】设置 1 小时缓存，避免重复请求高德 API 导致卡顿
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_amap_tips(keyword):
     if not keyword: return []
@@ -43,7 +43,6 @@ def get_amap_tips(keyword):
     try:
         res = requests.get(url, timeout=5).json()
         tips = res.get('tips', [])
-        # 只保留有具体坐标的结果
         return [t for t in tips if isinstance(t.get('location'), str) and t.get('location')]
     except:
         return []
@@ -107,80 +106,76 @@ with st.sidebar:
     st.text_area("报价文案：", value=quote_text, height=120)
 
 # --- 主界面 ---
-st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 高速缓存优化</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🚌 九江祥隆旅游运输报价系统</h1><p>旗舰版 | 紧凑型布局优化</p></div>', unsafe_allow_html=True)
 
-m_left, m_right = st.columns([1, 1.2])
+# 第一行：解析提取
+st.subheader("1️⃣ 行程解析提取")
+c1, c2, c3 = st.columns([1, 1, 1.2])
 
-# --- 1️⃣ 文字识别与提取 (中间) ---
-with m_left:
-    st.subheader("1️⃣ 行程解析提取")
+with c1:
     up_file = st.file_uploader("上传行程截图", type=["jpg", "png", "jpeg"])
     if up_file and st.button("🚀 识别图片文字", use_container_width=True):
         st.session_state['ocr_raw'] = ocr_engine(up_file.read())
-    
-    raw_txt = st.text_area("OCR识别结果：", value=st.session_state['ocr_raw'], height=150)
-    
-    col1, col2 = st.columns(2)
-    if col1.button("✨ 智能 AI 提取", use_container_width=True):
-        st.session_state['sites_preview'] = ai_extract_locations(raw_txt)
-    if col2.button("🤖 自动规则提取", use_container_width=True):
-        st.session_state['sites_preview'] = rule_extract_locations(raw_txt)
-    
-    st.divider()
-    edited_sites = st.text_area("🖊️ 提取地名列表 (可在此增删改地名)", 
-                                value=st.session_state['sites_preview'], 
-                                height=100)
-    st.session_state['sites_preview'] = edited_sites 
+    st.text_area("OCR识别结果：", value=st.session_state['ocr_raw'], height=100)
 
-    if st.button("✅ 确认并同步到站点框", type="primary", use_container_width=True):
+with c2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("✨ 智能 AI 提取", use_container_width=True):
+        st.session_state['sites_preview'] = ai_extract_locations(st.session_state['ocr_raw'])
+    if st.button("🤖 自动规则提取", use_container_width=True):
+        st.session_state['sites_preview'] = rule_extract_locations(st.session_state['ocr_raw'])
+    
+with c3:
+    edited_sites = st.text_area("🖊️ 提取地名列表 (可修改)", value=st.session_state['sites_preview'], height=80)
+    st.session_state['sites_preview'] = edited_sites 
+    if st.button("✅ 确认并同步到下方站点", type="primary", use_container_width=True):
         names = re.split(r'[，,\s]+', edited_sites)
         st.session_state['confirmed_sites'] = [n.strip() for n in names if n.strip()]
         st.rerun()
 
-# --- 2️⃣ 站点确认与公里数 (右侧) ---
-with m_right:
-    st.subheader("2️⃣ 站点位置确认")
-    current_coords = []
-    
-    if not st.session_state['confirmed_sites']:
-        st.info("💡 请在左侧解析地名后点击“同步”按钮")
-    else:
-        # 遍历确认好的地名列表
-        for i, name in enumerate(st.session_state['confirmed_sites']):
-            with st.container():
-                st.markdown(f'<div class="station-box">', unsafe_allow_html=True)
-                search_kw = st.text_input(f"站{i+1} 搜索关键词", value=name, key=f"inp_{name}_{i}")
-                
-                # 【优化点】使用带缓存的搜索函数，避免每次点击按钮都去联网请求高德
-                valid_tips = get_amap_tips(search_kw)
-                
-                if valid_tips:
-                    opts = [f"{t['name']} ({t.get('district','')})" for t in valid_tips]
-                    sel = st.selectbox(f"确认具体位置 {i+1}", opts, key=f"sel_{name}_{i}")
-                    # 匹配经纬度
-                    loc = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
-                    current_coords.append(loc)
-                else:
-                    st.warning("未找到匹配位置，请修改搜索关键词")
-                st.markdown('</div>', unsafe_allow_html=True)
+st.divider()
 
-        if len(current_coords) >= 2:
-            if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
-                with st.spinner("正在进行路线规划..."):
-                    org, des = current_coords[0], current_coords[-1]
-                    way = ";".join(current_coords[1:-1])
-                    d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
-                    
-                    try:
-                        res = requests.get(d_url, timeout=10).json()
-                        if res.get('status') == '1' and 'route' in res:
-                            dist = int(res['route']['paths'][0]['distance']) / 1000
-                            st.session_state['km_auto'] = int(dist)
-                            st.success(f"🚩 规划成功！总里程：{int(dist)} KM")
-                            st.toast("里程已同步")
-                            time.sleep(0.3)
-                            st.rerun()
-                        else:
-                            st.error(f"测距失败: {res.get('info')}")
-                    except Exception as e:
-                        st.error(f"网络异常: {str(e)}")
+# 第二行：站点横向排列确认 (你要求改进的地方)
+st.subheader("2️⃣ 站点位置确认")
+if not st.session_state['confirmed_sites']:
+    st.info("💡 请在上方解析地名后点击“确认并同步”")
+else:
+    # 动态创建列，每行放 4 个站点（如果站点很多会自动适应）
+    num_sites = len(st.session_state['confirmed_sites'])
+    cols = st.columns(num_sites if num_sites > 0 else 1)
+    
+    current_coords = []
+    for i, name in enumerate(st.session_state['confirmed_sites']):
+        with cols[i]:
+            st.markdown(f'<p class="compact-label">🚩 第 {i+1} 站</p>', unsafe_allow_html=True)
+            # 搜索词
+            search_kw = st.text_input(f"搜索{i+1}", value=name, key=f"inp_{name}_{i}", label_visibility="collapsed")
+            
+            # 获取建议
+            valid_tips = get_amap_tips(search_kw)
+            if valid_tips:
+                opts = [f"{t['name']} ({t.get('district','')})" for t in valid_tips]
+                sel = st.selectbox(f"确认{i+1}", opts, key=f"sel_{name}_{i}", label_visibility="collapsed")
+                loc = next(t['location'] for t in valid_tips if sel.startswith(t['name']))
+                current_coords.append(loc)
+            else:
+                st.caption("⚠️ 未找到")
+
+    # 计算里程按钮
+    st.markdown("<br>", unsafe_allow_html=True)
+    if len(current_coords) >= 2:
+        if st.button("🗺️ 开始计算导航里程", type="primary", use_container_width=True):
+            with st.spinner("正在测距..."):
+                org, des = current_coords[0], current_coords[-1]
+                way = ";".join(current_coords[1:-1])
+                d_url = f"https://restapi.amap.com/v3/direction/driving?origin={org}&destination={des}&waypoints={way}&key={AMAP_KEY}"
+                try:
+                    res = requests.get(d_url, timeout=10).json()
+                    if res.get('status') == '1':
+                        dist = int(res['route']['paths'][0]['distance']) / 1000
+                        st.session_state['km_auto'] = int(dist)
+                        st.success(f"规划成功！总里程：{int(dist)} KM")
+                        time.sleep(0.3)
+                        st.rerun()
+                except:
+                    st.error("测距失败")
